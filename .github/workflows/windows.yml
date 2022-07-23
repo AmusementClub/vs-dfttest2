@@ -3,7 +3,7 @@ name: Build (Windows)
 on:
   push:
     paths:
-      - 'source/*'
+      - 'cuda_source/*'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
     inputs:
@@ -95,13 +95,13 @@ jobs:
         cd artifact
 
         mkdir vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}
-        xcopy bm3dcuda.dll vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }} /f
+        xcopy dfttest2_cuda.dll vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }} /f
         7z a -t7z -mx=9 ../vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}.7z vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}
         
         cd ../cufft
 
         mkdir cufft-windows-${{ github.event.inputs.tag }}
-        xcopy cufft_*.dll cufft-windows-${{ github.event.inputs.tag }} /f
+        xcopy cufft64_*.dll cufft-windows-${{ github.event.inputs.tag }} /f
         7z a -t7z -mx=9 ../cufft-windows-${{ github.event.inputs.tag }}.7z cufft-windows-${{ github.event.inputs.tag }}
 
     - name: Release

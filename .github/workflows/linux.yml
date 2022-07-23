@@ -3,7 +3,7 @@ name: Build (Linux)
 on:
   push:
     paths:
-      - 'source/*'
+      - 'cuda_source/*'
       - '.github/workflows/linux.yml'
   workflow_dispatch:
 
