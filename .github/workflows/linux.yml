@@ -1,0 +1,60 @@
+name: Build (Linux)
+
+on:
+  push:
+    paths:
+      - 'source/*'
+      - '.github/workflows/linux.yml'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Setup GCC and Ninja
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++-11 ninja-build
+        echo "CC=gcc-11" >> $GITHUB_ENV
+        echo "CXX=g++-11" >> $GITHUB_ENV
+
+    - name: Setup CUDA
+      run: |
+        wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
+        sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
+        sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+        sudo apt-get install -y cuda-nvcc-11-7 cuda-cudart-dev-11-7 cuda-nvrtc-dev-11-7 libcufft-dev-11-7
+        echo "PATH=/usr/local/cuda/bin${PATH:+:${PATH}}" >> $GITHUB_ENV
+        echo "CUDA_PATH=/usr/local/cuda" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=/usr/local/cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> $GITHUB_ENV
+
+    - name: Download VapourSynth headers
+      run: |
+        wget -q -O vs.zip https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R57.zip
+        unzip -q vs.zip
+        mv vapoursynth*/ vapoursynth
+
+    - name: Configure
+      run: cmake -S . -B build -G Ninja
+        -D USE_NVRTC_STATIC=ON
+        -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
+        -D CMAKE_BUILD_TYPE=Release
+        -D CMAKE_CXX_FLAGS_RELEASE="-ffast-math -march=x86-64-v3"
+
+    - name: Build
+      run: cmake --build build --config Release --verbose
+
+    - name: Install
+      run: cmake --install build --prefix artifact
+
+    - name: Upload
+      uses: actions/upload-artifact@v2
+      with:
+        name: vs-dfttest2-cuda-Linux
+        path: artifact

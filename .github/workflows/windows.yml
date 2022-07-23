@@ -1,0 +1,89 @@
+name: Build (Windows)
+
+on:
+  push:
+    paths:
+      - 'source/*'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'which tag to upload to'
+        default: ''
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Setup Ninja
+      run: pip install ninja
+
+    - name: Cache CUDA
+      id: cache-cuda
+      uses: actions/cache@v2
+      with:
+        path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
+        key: ${{ runner.os }}-cuda-11.7.0
+
+    - name: Setup CUDA
+      if: steps.cache-cuda.outputs.cache-hit != 'true'
+      run: |
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/11.7.0/network_installers/cuda_11.7.0_windows_network.exe
+        cuda_installer.exe -s nvcc_11.7 cudart_11.7 nvrtc_dev_11.7 cufft_dev_11.7
+
+    - name: Download VapourSynth headers
+      run: |
+        curl -s -o vs.zip -L https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R57.zip
+        unzip -q vs.zip
+        mv vapoursynth-*/ vapoursynth/
+
+    - name: Configure
+      shell: bash
+      run: cmake -S . -B build -G Ninja -LA
+        -D CMAKE_BUILD_TYPE=Release
+        -D USE_NVRTC_STATIC=ON
+        -D VS_INCLUDE_DIR="$(pwd)\vapoursynth\include"
+        -D CMAKE_CXX_FLAGS="/fp:fast /arch:AVX /EHsc"
+        -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+      env:
+        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
+        CUDA_PATH_V11_7: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
+
+    - name: Build
+      run: cmake --build build --verbose
+
+    - name: Install
+      run: cmake --install build --prefix install
+
+    - name: Prepare for upload
+      run: |
+        mkdir artifact
+        copy install\bin\*.dll artifact
+        mkdir cufft
+        copy "%CUDA_PATH%\bin\cufft64_*.dll" cufft
+
+    - name: Upload
+      uses: actions/upload-artifact@v2
+      with:
+        name: vs-dfttest2-cuda-windows
+        path: artifact
+
+    - name: Upload cufft
+      uses: actions/upload-artifact@v2
+      with:
+        name: cufft-windows
+        path: cufft
+
