@@ -366,6 +366,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     sizeof(float);
 
                 if (auto result = cuMemHostAlloc(reinterpret_cast<void **>(&h_spatial), size, 0); !success(result)) {
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
@@ -410,6 +411,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 if (auto result = cuMemcpyHtoDAsync(d->d_spatial,h_spatial, spatial_size, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
@@ -420,6 +422,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 if (auto result = cufftExecR2C(d->rfft2d_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     message << '[' << __LINE__ << "] cufft(rfft2): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
@@ -431,6 +434,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     if (auto result = cuLaunchKernel(d->kernel, static_cast<unsigned int>((n + 127) / 128), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         vsapi->freeFrame(dst_frame);
                         vsapi->freeFrame(src_frame);
+                        showError(cuCtxPopCurrent(nullptr));
                         std::ostringstream message;
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
@@ -442,6 +446,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 if (auto result = cufftExecC2R(d->irfft2d_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     message << '[' << __LINE__ << "] cufft(irfft2): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
@@ -450,6 +455,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 if (auto result = cuMemcpyDtoHAsync(h_spatial, d->d_spatial, spatial_size, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
@@ -460,6 +466,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
+                    showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
