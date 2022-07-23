@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22.0)
 
-project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX CUDA)
+project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX)
 
 set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
