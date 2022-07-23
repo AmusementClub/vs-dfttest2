@@ -299,6 +299,7 @@ struct DFTTestData {
     CUstream stream;
     CUdeviceptr d_spatial; // (vertical_num, horizontal_num, block_size, block_size)
     CUdeviceptr d_frequency; // (vertical_num, horizontal_num, block_size, block_size/2+1)
+    std::mutex lock; // TODO: replace by `num_streams`
 
     cufftHandle rfft2d_handle;
     cufftHandle irfft2d_handle;
@@ -402,66 +403,70 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 d->block_size, d->block_step
             );
 
-            auto spatial_size = calc_spatial_size(width, height, d->block_size, d->block_step);
-            if (auto result = cuMemcpyHtoDAsync(d->d_spatial,h_spatial, spatial_size, d->stream); !success(result)) {
-                vsapi->freeFrame(dst_frame);
-                vsapi->freeFrame(src_frame);
-                std::ostringstream message;
-                const char * error_message;
-                showError(cuGetErrorString(result, &error_message));
-                message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
-                vsapi->setFilterError(message.str().c_str(), frameCtx);
-                return nullptr;
-            }
-            if (auto result = cufftExecR2C(d->rfft2d_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)); !success(result)) {
-                vsapi->freeFrame(dst_frame);
-                vsapi->freeFrame(src_frame);
-                std::ostringstream message;
-                message << '[' << __LINE__ << "] cufft(rfft2): " << cufftGetErrorString(result);
-                vsapi->setFilterError(message.str().c_str(), frameCtx);
-                return nullptr;
-            }
             {
-                int n = static_cast<int>(calc_frequency_size(width, height, d->block_size, d->block_step) / sizeof(cufftComplex));
-                void * params[] { &d->d_frequency, &n, &d->block_size };
-                if (auto result = cuLaunchKernel(d->kernel, static_cast<unsigned int>((n + 127) / 128), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                std::lock_guard lock { d->lock };
+
+                auto spatial_size = calc_spatial_size(width, height, d->block_size, d->block_step);
+                if (auto result = cuMemcpyHtoDAsync(d->d_spatial,h_spatial, spatial_size, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     vsapi->freeFrame(src_frame);
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
-                    message << '[' << __LINE__ << "] cuLaunchKernel(): " << error_message;
+                    message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-            }
-            if (auto result = cufftExecC2R(d->irfft2d_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
-                vsapi->freeFrame(dst_frame);
-                vsapi->freeFrame(src_frame);
-                std::ostringstream message;
-                message << '[' << __LINE__ << "] cufft(irfft2): " << cufftGetErrorString(result);
-                vsapi->setFilterError(message.str().c_str(), frameCtx);
-                return nullptr;
-            }
-            if (auto result = cuMemcpyDtoHAsync(h_spatial, d->d_spatial, spatial_size, d->stream); !success(result)) {
-                vsapi->freeFrame(dst_frame);
-                vsapi->freeFrame(src_frame);
-                std::ostringstream message;
-                const char * error_message;
-                showError(cuGetErrorString(result, &error_message));
-                message << '[' << __LINE__ << "] cuMemcpyDtoHAsync(): " << error_message;
-                vsapi->setFilterError(message.str().c_str(), frameCtx);
-                return nullptr;
-            }
-            if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
-                vsapi->freeFrame(dst_frame);
-                vsapi->freeFrame(src_frame);
-                std::ostringstream message;
-                const char * error_message;
-                showError(cuGetErrorString(result, &error_message));
-                message << '[' << __LINE__ << "] cuStreamSynchronize(): " << error_message;
-                vsapi->setFilterError(message.str().c_str(), frameCtx);
-                return nullptr;
+                if (auto result = cufftExecR2C(d->rfft2d_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)); !success(result)) {
+                    vsapi->freeFrame(dst_frame);
+                    vsapi->freeFrame(src_frame);
+                    std::ostringstream message;
+                    message << '[' << __LINE__ << "] cufft(rfft2): " << cufftGetErrorString(result);
+                    vsapi->setFilterError(message.str().c_str(), frameCtx);
+                    return nullptr;
+                }
+                {
+                    int n = static_cast<int>(calc_frequency_size(width, height, d->block_size, d->block_step) / sizeof(cufftComplex));
+                    void * params[] { &d->d_frequency, &n, &d->block_size };
+                    if (auto result = cuLaunchKernel(d->kernel, static_cast<unsigned int>((n + 127) / 128), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                        vsapi->freeFrame(dst_frame);
+                        vsapi->freeFrame(src_frame);
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuLaunchKernel(): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
+                }
+                if (auto result = cufftExecC2R(d->irfft2d_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
+                    vsapi->freeFrame(dst_frame);
+                    vsapi->freeFrame(src_frame);
+                    std::ostringstream message;
+                    message << '[' << __LINE__ << "] cufft(irfft2): " << cufftGetErrorString(result);
+                    vsapi->setFilterError(message.str().c_str(), frameCtx);
+                    return nullptr;
+                }
+                if (auto result = cuMemcpyDtoHAsync(h_spatial, d->d_spatial, spatial_size, d->stream); !success(result)) {
+                    vsapi->freeFrame(dst_frame);
+                    vsapi->freeFrame(src_frame);
+                    std::ostringstream message;
+                    const char * error_message;
+                    showError(cuGetErrorString(result, &error_message));
+                    message << '[' << __LINE__ << "] cuMemcpyDtoHAsync(): " << error_message;
+                    vsapi->setFilterError(message.str().c_str(), frameCtx);
+                    return nullptr;
+                }
+                if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
+                    vsapi->freeFrame(dst_frame);
+                    vsapi->freeFrame(src_frame);
+                    std::ostringstream message;
+                    const char * error_message;
+                    showError(cuGetErrorString(result, &error_message));
+                    message << '[' << __LINE__ << "] cuStreamSynchronize(): " << error_message;
+                    vsapi->setFilterError(message.str().c_str(), frameCtx);
+                    return nullptr;
+                }
             }
 
             auto dstp = vsapi->getWritePtr(dst_frame, plane);
@@ -734,7 +739,7 @@ static void VS_CC DFTTestCreate(
     vsapi->createFilter(
         in, out, "DFTTest", 
         DFTTestInit, DFTTestGetFrame, DFTTestFree, 
-        fmParallelRequests, 0, d.release(), core
+        fmParallel, 0, d.release(), core
     );
 }
 
