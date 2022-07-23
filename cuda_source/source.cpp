@@ -542,10 +542,7 @@ static void VS_CC DFTTestCreate(
     auto kernel_source = vsapi->propGetData(in, "kernel", 0, nullptr);
     auto compilation = compile(kernel_source);
     if (std::holds_alternative<std::string>(compilation)) {
-        showError(cufftDestroy(d->irfft2d_handle));
-        showError(cufftDestroy(d->rfft2d_handle));
-        showError(cuMemFree(d->d_frequency));
-        showError(cuMemFree(d->d_spatial));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -553,9 +550,21 @@ static void VS_CC DFTTestCreate(
         return ;
     }
     d->module = std::get<CUmodule>(compilation);
-    showError(cuModuleGetFunction(&d->kernel, d->module, "frequency_filtering"));
+    if (auto result = cuModuleGetFunction(&d->kernel, d->module, "frequency_filtering"); !success(result)) {
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
+        vsapi->freeNode(d->node);
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuModuleGetFunction(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
 
     if (auto result = cuStreamCreate(&d->stream, CU_STREAM_NON_BLOCKING); !success(result)) {
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         const char * error_message;
@@ -566,6 +575,9 @@ static void VS_CC DFTTestCreate(
     }
 
     if (auto result = cuMemAlloc(&d->d_spatial, calc_spatial_size(vi->width, vi->height, d->block_size, d->block_step)); !success(result)) {
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         const char * error_message;
@@ -577,6 +589,9 @@ static void VS_CC DFTTestCreate(
 
     if (auto result = cuMemAlloc(&d->d_frequency, calc_frequency_size(vi->width, vi->height, d->block_size, d->block_step)); !success(result)) {
         showError(cuMemFree(d->d_spatial));
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         const char * error_message;
@@ -590,6 +605,9 @@ static void VS_CC DFTTestCreate(
     if (auto result = cufftCreate(&d->rfft2d_handle); !success(result)) {
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         message << '[' << __LINE__ << "] cufftCreate(rfft2): " << cufftGetErrorString(result);
@@ -603,6 +621,9 @@ static void VS_CC DFTTestCreate(
             showError(cufftDestroy(d->rfft2d_handle));
             showError(cuMemFree(d->d_frequency));
             showError(cuMemFree(d->d_spatial));
+            showError(cuStreamDestroy(d->stream));
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
             vsapi->freeNode(d->node);
             std::ostringstream message;
             message << '[' << __LINE__ << "] cufftPlanMany(rfft2): " << cufftGetErrorString(result);
@@ -614,6 +635,9 @@ static void VS_CC DFTTestCreate(
         showError(cufftDestroy(d->rfft2d_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         message << '[' << __LINE__ << "] cufftSetStream(rfft2): " << cufftGetErrorString(result);
@@ -625,6 +649,9 @@ static void VS_CC DFTTestCreate(
         showError(cufftDestroy(d->rfft2d_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         message << '[' << __LINE__ << "] cufftCreate(irfft2): " << cufftGetErrorString(result);
@@ -639,6 +666,9 @@ static void VS_CC DFTTestCreate(
             showError(cufftDestroy(d->rfft2d_handle));
             showError(cuMemFree(d->d_frequency));
             showError(cuMemFree(d->d_spatial));
+            showError(cuStreamDestroy(d->stream));
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
             vsapi->freeNode(d->node);
             std::ostringstream message;
             message << '[' << __LINE__ << "] cufftPlanMany(irfft2): " << cufftGetErrorString(result);
@@ -651,6 +681,9 @@ static void VS_CC DFTTestCreate(
         showError(cufftDestroy(d->rfft2d_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
+        showError(cuStreamDestroy(d->stream));
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
         message << '[' << __LINE__ << "] cufftSetStream(irfft2): " << cufftGetErrorString(result);
