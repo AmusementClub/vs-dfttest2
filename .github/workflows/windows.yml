@@ -73,7 +73,7 @@ jobs:
         mkdir artifact
         copy install\bin\*.dll artifact
         mkdir cufft
-        copy "%CUDA_PATH%\bin\cufft64_*.dll" cufft
+        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin\cufft64_*.dll" cufft
 
     - name: Upload
       uses: actions/upload-artifact@v2
