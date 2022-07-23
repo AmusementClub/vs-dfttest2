@@ -55,6 +55,7 @@ jobs:
 
     - name: Upload
       uses: actions/upload-artifact@v2
+      if: false
       with:
         name: vs-dfttest2-cuda-Linux
         path: artifact

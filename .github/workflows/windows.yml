@@ -77,13 +77,42 @@ jobs:
 
     - name: Upload
       uses: actions/upload-artifact@v2
+      if: false
       with:
         name: vs-dfttest2-cuda-windows
         path: artifact
 
     - name: Upload cufft
       uses: actions/upload-artifact@v2
+      if: false
       with:
         name: cufft-windows
         path: cufft
+
+    - name: Compress artifact for release
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+      run: |
+        cd artifact
+
+        mkdir vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}
+        xcopy bm3dcuda.dll vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }} /f
+        7z a -t7z -mx=9 ../vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}.7z vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}
+        
+        cd ../cufft
+
+        mkdir cufft-windows-${{ github.event.inputs.tag }}
+        xcopy cufft_*.dll cufft-windows-${{ github.event.inputs.tag }} /f
+        7z a -t7z -mx=9 ../cufft-windows-${{ github.event.inputs.tag }}.7z cufft-windows-${{ github.event.inputs.tag }}
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+      with:
+        tag_name: ${{ github.event.inputs.tag }}
+        files: |
+          vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}.7z
+          cufft-windows-${{ github.event.inputs.tag }}.7z
+        fail_on_unmatched_files: true
+        generate_release_notes: false
+        prerelease: true
 
