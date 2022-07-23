@@ -203,10 +203,35 @@ static int calc_frequency_size(int width, int height, int block_size, int block_
 }
 
 static std::variant<CUmodule, std::string> compile(
-    const char * kernel
+    const char * kernel,
     // int width, int height, int stride,
-    // CUdevice device
+    CUdevice device
 ) {
+
+    int major;
+    if (auto result = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device); !success(result)) {
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        return std::string{error_message};
+    }
+    int minor;
+    if (auto result = cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device); !success(result)) {
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        return std::string{error_message};
+    }
+    int compute_capability = major * 10 + minor;
+
+    // find maximum supported architecture
+    int num_archs;
+    if (auto result = nvrtcGetNumSupportedArchs(&num_archs); !success(result)) {
+        return std::string{nvrtcGetErrorString(result)};
+    }
+    const auto supported_archs = std::make_unique<int []>(num_archs);
+    if (auto result = nvrtcGetSupportedArchs(supported_archs.get()); !success(result)) {
+        return std::string{nvrtcGetErrorString(result)};
+    }
+    bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
 
     std::ostringstream kernel_source;
     kernel_source << kernel_header_template;
@@ -217,8 +242,14 @@ static std::variant<CUmodule, std::string> compile(
         return std::string{nvrtcGetErrorString(result)};
     }
 
+    const std::string arch_str = {
+        generate_cubin ?
+        "-arch=sm_" + std::to_string(compute_capability) :
+        "-arch=compute_" + std::to_string(supported_archs[num_archs - 1])
+    };
+
     const char * opts[] = {
-        "-arch=sm_50",
+        arch_str.c_str(),
         "-use_fast_math",
         "-std=c++17",
         "-modify-stack-limit=false"
@@ -236,10 +267,12 @@ static std::variant<CUmodule, std::string> compile(
 
     size_t cubin_size;
     if (auto result = nvrtcGetCUBINSize(program, &cubin_size); !success(result)) {
+        showError(nvrtcDestroyProgram(&program));
         return std::string{nvrtcGetErrorString(result)};
     }
     auto image = std::make_unique<char[]>(cubin_size);
     if (auto result = nvrtcGetCUBIN(program, image.get()); !success(result)) {
+        showError(nvrtcDestroyProgram(&program));
         return std::string{nvrtcGetErrorString(result)};
     }
 
@@ -540,7 +573,7 @@ static void VS_CC DFTTestCreate(
     }
 
     auto kernel_source = vsapi->propGetData(in, "kernel", 0, nullptr);
-    auto compilation = compile(kernel_source);
+    auto compilation = compile(kernel_source, d->device);
     if (std::holds_alternative<std::string>(compilation)) {
         showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
