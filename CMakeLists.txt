@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.22.0)
 
-project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX)
+project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX CUDA)
 
 set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
 find_package(CUDAToolkit REQUIRED)
 
-add_library(dfttest2 SHARED source/source.cpp)
+add_library(dfttest2 SHARED cuda_source/source.cpp)
 
 set_target_properties(dfttest2 PROPERTIES
     CXX_EXTENSIONS OFF

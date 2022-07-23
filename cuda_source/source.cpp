@@ -674,7 +674,7 @@ static void VS_CC DFTTestCreate(
 
 VS_EXTERNAL_API(void)
 VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
-    configFunc("io.github.amusementclub.dfttest2", "dfttest2", "DFTTest2", VAPOURSYNTH_API_VERSION, 1, plugin);
+    configFunc("io.github.amusementclub.dfttest2_cuda", "dfttest2_cuda", "DFTTest2 (CUDA)", VAPOURSYNTH_API_VERSION, 1, plugin);
 
     registerFunc(
         "DFTTest", 
