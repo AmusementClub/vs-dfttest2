@@ -109,22 +109,41 @@ static void cufftDestroyCustom(cufftHandle handle) {
 }
 
 static void nvrtcDestroyProgramCustom(nvrtcProgram * program) {
-    puts("3");
     showError(nvrtcDestroyProgram(program));
 }
 
+struct context_releaser {
+    bool * context_retained {};
+    CUdevice device;
+    void release() {
+        context_retained = nullptr;
+    }
+    ~context_releaser() {
+        if (context_retained && *context_retained) {
+            showError(cuDevicePrimaryCtxRelease(device));
+        }
+    }
+};
+
 struct context_popper {
+    bool * context_pushed {};
     ~context_popper() {
-        showError(cuCtxPopCurrent(nullptr));
+        if (!context_pushed || *context_pushed) {
+            showError(cuCtxPopCurrent(nullptr));
+        }
     }
 };
 
 struct node_freer {
-    const VSAPI * vsapi;
-    VSNodeRef * node;
-
+    const VSAPI * & vsapi;
+    VSNodeRef * node {};
+    void release() {
+        node = nullptr;
+    }
     ~node_freer() {
-        vsapi->freeNode(node);
+        if (node) {
+            vsapi->freeNode(node);
+        }
     }
 };
 
@@ -350,7 +369,7 @@ static std::variant<CUmodule, std::string> compile(
     if (nvrtcCompileProgram(program, static_cast<int>(std::extent_v<decltype(opts)>), opts) == NVRTC_SUCCESS) {
         size_t log_size;
         showError(nvrtcGetProgramLogSize(program, &log_size));
-        if (log_size > 0) {
+        if (log_size > 1) {
             std::string error_message;
             error_message.resize(log_size);
             showError(nvrtcGetProgramLog(program, error_message.data()));
@@ -660,6 +679,8 @@ static void VS_CC DFTTestFree(
 
     vsapi->freeNode(d->node);
 
+    showError(cuCtxPushCurrent(d->context));
+
     for (const auto & [_, thread_data] : d->thread_data) {
         std::free(thread_data.padded);
         showError(cuMemFreeHost(thread_data.h_spatial));
@@ -667,15 +688,23 @@ static void VS_CC DFTTestFree(
 
     delete d;
 
-    showError(cuDevicePrimaryCtxRelease(d->device));
+    showError(cuCtxPopCurrent(nullptr));
 
-    puts("destroy");
+    showError(cuDevicePrimaryCtxRelease(d->device));
 }
 
 static void VS_CC DFTTestCreate(
     const VSMap *in, VSMap *out, void *userData,
     VSCore *core, const VSAPI *vsapi
 ) noexcept {
+
+    bool context_retained = false;
+    bool context_pushed = false;
+
+    context_releaser context_releaser { &context_retained };
+
+    // release before pop context
+    context_popper context_popper { &context_pushed };
 
     auto d = std::make_unique<DFTTestData>();
 
@@ -752,6 +781,9 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
+    context_retained = true;
+    context_releaser.device = d->device;
+
     if (auto result = cuCtxPushCurrent(d->context); !success(result)) {
         std::ostringstream message;
         const char * error_message;
@@ -761,7 +793,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    context_popper context_popper;
+    context_pushed = true;
 
     auto compilation = compile(user_kernel, d->device, d->zero_mean);
     if (std::holds_alternative<std::string>(compilation)) {
@@ -931,6 +963,9 @@ static void VS_CC DFTTestCreate(
         DFTTestInit, DFTTestGetFrame, DFTTestFree,
         fmParallel, 0, d.release(), core
     );
+
+    node_freer.release();
+    context_releaser.release();
 }
 
 VS_EXTERNAL_API(void)
