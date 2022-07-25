@@ -183,17 +183,16 @@ def DFTTest(
         temporal_beta=temporal_beta
     )
 
+    wscale = math.fsum(w * w for w in window)
+
     if ftype < 2:
-        wscale = math.fsum(w * w for w in window)
-    else:
-        wscale = 1.0
-
-    dftgc = get_dftgc(window=window, radius=radius, block_size=block_size)
-
-    sigma *= wscale
-    sigma2 *= wscale
+        sigma *= wscale
+        sigma2 *= wscale
+    
     pmin *= wscale
     pmax *= wscale
+
+    dftgc = get_dftgc(window=window, radius=radius, block_size=block_size)
 
     kernel = Template(
     """
