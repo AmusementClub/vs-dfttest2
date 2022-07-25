@@ -144,11 +144,11 @@ static void reflection_padding(
 }
 
 static void im2col(
-    float * VS_RESTRICT dst, // shape: (vertical_num, horizontal_num, block_size, block_size)
-    const float * const * VS_RESTRICT srcs, // shape: (radius, vertical_size, horizontal_size)
-    const float * VS_RESTRICT window, // shape: (block_size, block_size)
-    int radius,
+    float * VS_RESTRICT dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    const float * VS_RESTRICT srcp, // shape: (vertical_size, horizontal_size)
+    const float * VS_RESTRICT window, // shape: (2*radius+1, block_size, block_size)
     int width, int height,
+    int radius, int temporal_id,
     int block_size, int block_step
 ) {
 
@@ -158,22 +158,23 @@ static void im2col(
 
     for (int i = 0; i < vertical_num; i++) {
         for (int j = 0; j < horizontal_num; j++) {
-            auto src = &(*srcs)[i * block_step * horizontal_size + j * block_step];
+            auto src = &srcp[i * block_step * horizontal_size + j * block_step];
             for (int k = 0; k < block_size; k++) {
                 for (int l = 0; l < block_size; l++) {
-                    dst[k * block_size + l] = src[k * horizontal_size + l] * window[k * block_size + l];
+                    dstp[k * block_size + l] = src[k * horizontal_size + l] * window[(temporal_id * block_size + k) * block_size + l];
                 }
             }
-            dst += square(block_size);
+            dstp += (2 * radius + 1) * square(block_size);
         }
     }
 }
 
 static void col2im(
     float * VS_RESTRICT dst, // shape: (vertical_size, horizontal_size)
-    const float * VS_RESTRICT src, // shape: (vertical_num, horizontal_num, block_size, block_size)
-    const float * VS_RESTRICT window, // shape: (block_size, block_size)
+    const float * VS_RESTRICT src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    const float * VS_RESTRICT window, // shape: (2*radius+1, block_size, block_size)
     int width, int height,
+    int radius,
     int block_size, int block_step
 ) {
 
@@ -188,8 +189,8 @@ static void col2im(
             for (int k = 0; k < block_size; k++) {
                 for (int l = 0; l < block_size; l++) {
                     dst[(i * block_step + k) * horizontal_size + j * block_step + l] +=
-                        src[((i * horizontal_num + j) * block_size + k) * block_size + l] *
-                        window[k * block_size + l];
+                        src[(((i * horizontal_num + j) * (2 * radius + 1) + radius) * block_size + k) * block_size + l] *
+                        window[(radius * block_size + k) * block_size + l];
                 }
             }
         }
@@ -318,8 +319,8 @@ struct DFTTestData {
     CUdeviceptr d_mean; // (vertical_num, horizontal_num, block_size, block_size/2+1)
     std::mutex lock; // TODO: replace by `num_streams`
 
-    cufftHandle rfft2d_handle;
-    cufftHandle irfft2d_handle;
+    cufftHandle rfft_handle; // 2-D or 3-D, depends on radius
+    cufftHandle irfft_handle;
 
     CUmodule module;
     CUfunction filter_kernel;
@@ -353,7 +354,12 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
     auto d = static_cast<DFTTestData *>(*instanceData);
 
     if (activationReason == arInitial) {
-        vsapi->requestFrameFilter(n, d->node, frameCtx);
+        int start = std::max(n - d->radius, 0);
+        auto vi = vsapi->getVideoInfo(d->node);
+        int end = std::min(n + d->radius, vi->numFrames - 1);
+        for (int i = start; i <= end; i++) {
+            vsapi->requestFrameFilter(i, d->node, frameCtx);
+        }
     } else if (activationReason == arAllFramesReady) {
         if (auto result = cuCtxPushCurrent(d->context); !success(result)) {
             std::ostringstream message;
@@ -399,6 +405,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
 
                 auto spatial_size = (
+                    (2 * d->radius + 1) *
                     calc_pad_num(vi->height, d->block_size, d->block_step) *
                     calc_pad_num(vi->width, d->block_size, d->block_step) *
                     square(d->block_size) *
@@ -424,33 +431,43 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 d->num_uninitialized_threads.fetch_sub(1, std::memory_order_release);
             }
         }
-        auto src_frame = vsapi->getFrameFilter(n, d->node, frameCtx);
-        auto format = vsapi->getFrameFormat(src_frame);
 
-        auto dst_frame = vsapi->newVideoFrame(format, vi->width, vi->height, src_frame, core);
+        std::vector<const VSFrameRef *> src_frames;
+        src_frames.reserve(2 * d->radius + 1);
+        for (int i = n - d->radius; i <= d->radius; i++) {
+            src_frames.emplace_back(vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx));
+        }
+
+        auto & src_center_frame = src_frames[d->radius];
+        auto format = vsapi->getFrameFormat(src_center_frame);
+
+        auto dst_frame = vsapi->newVideoFrame(format, vi->width, vi->height, src_center_frame, core);
 
         for (int plane = 0; plane < format->numPlanes; plane++) {
-            int width = vsapi->getFrameWidth(src_frame, plane);
-            int height = vsapi->getFrameHeight(src_frame, plane);
-            int stride = vsapi->getStride(src_frame, plane) / sizeof(float);
+            int width = vsapi->getFrameWidth(src_center_frame, plane);
+            int height = vsapi->getFrameHeight(src_center_frame, plane);
+            int stride = vsapi->getStride(src_center_frame, plane) / sizeof(float);
 
-            auto srcp = vsapi->getReadPtr(src_frame, plane);
-            reflection_padding(
-                thread_data.padded,
-                reinterpret_cast<const float *>(srcp),
-                width, height, stride,
-                d->block_size, d->block_step
-            );
-
-            im2col(thread_data.h_spatial, &thread_data.padded, d->window, 0, width, height, d->block_size, d->block_step);
+            for (int i = 0; i < 2 * d->radius + 1; i++) {
+                auto srcp = vsapi->getReadPtr(src_frames[i], plane);
+                reflection_padding(
+                    thread_data.padded,
+                    reinterpret_cast<const float *>(srcp),
+                    width, height, stride,
+                    d->block_size, d->block_step
+                );
+                im2col(&thread_data.h_spatial[i * square(d->block_size)], thread_data.padded, d->window, width, height, d->radius, i, d->block_size, d->block_step);
+            }
 
             {
                 std::lock_guard lock { d->lock };
 
-                int spatial_size_bytes = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float);
+                int spatial_size_bytes = (2 * d->radius + 1) * calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float);
                 if (auto result = cuMemcpyHtoDAsync(d->d_spatial, thread_data.h_spatial, spatial_size_bytes, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
-                    vsapi->freeFrame(src_frame);
+                    for (const auto & frame : src_frames) {
+                        vsapi->freeFrame(frame);
+                    }
                     showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
@@ -459,12 +476,14 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-                if (auto result = cufftExecR2C(d->rfft2d_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)); !success(result)) {
+                if (auto result = cufftExecR2C(d->rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)); !success(result)) {
                     vsapi->freeFrame(dst_frame);
-                    vsapi->freeFrame(src_frame);
+                    for (const auto & frame : src_frames) {
+                        vsapi->freeFrame(frame);
+                    }
                     showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
-                    message << '[' << __LINE__ << "] cufft(rfft2): " << cufftGetErrorString(result);
+                    message << '[' << __LINE__ << "] cufft(rfft): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
@@ -473,7 +492,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     void * params[] { &d->d_frequency, &d->d_mean, &num_blocks, &d->radius, &d->block_size };
                     if (auto result = cuLaunchKernel(d->remove_mean_kernel, static_cast<unsigned int>(d->remove_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         vsapi->freeFrame(dst_frame);
-                        vsapi->freeFrame(src_frame);
+                        for (const auto & frame : src_frames) {
+                            vsapi->freeFrame(frame);
+                        }
                         showError(cuCtxPopCurrent(nullptr));
                         std::ostringstream message;
                         const char * error_message;
@@ -482,13 +503,16 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
+                    showError(cuStreamSynchronize(d->stream));
                 }
                 {
-                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1);
-                    void * params[] { &d->d_frequency, &frequency_size, &d->block_size };
+                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1);
+                    void * params[] { &d->d_frequency, &frequency_size, &d->radius, &d->block_size };
                     if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         vsapi->freeFrame(dst_frame);
-                        vsapi->freeFrame(src_frame);
+                        for (const auto & frame : src_frames) {
+                            vsapi->freeFrame(frame);
+                        }
                         showError(cuCtxPopCurrent(nullptr));
                         std::ostringstream message;
                         const char * error_message;
@@ -497,13 +521,16 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
+                    showError(cuStreamSynchronize(d->stream));
                 }
                 if (d->zero_mean) {
-                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * 2;
+                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1) * 2;
                     void * params[] { &d->d_frequency, &d->d_mean, &frequency_size };
                     if (auto result = cuLaunchKernel(d->add_mean_kernel, static_cast<unsigned int>(d->add_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         vsapi->freeFrame(dst_frame);
-                        vsapi->freeFrame(src_frame);
+                        for (const auto & frame : src_frames) {
+                            vsapi->freeFrame(frame);
+                        }
                         showError(cuCtxPopCurrent(nullptr));
                         std::ostringstream message;
                         const char * error_message;
@@ -512,19 +539,25 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
+                    showError(cuStreamSynchronize(d->stream));
                 }
-                if (auto result = cufftExecC2R(d->irfft2d_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
+                if (auto result = cufftExecC2R(d->irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
                     vsapi->freeFrame(dst_frame);
-                    vsapi->freeFrame(src_frame);
+                    for (const auto & frame : src_frames) {
+                        vsapi->freeFrame(frame);
+                    }
                     showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
-                    message << '[' << __LINE__ << "] cufft(irfft2): " << cufftGetErrorString(result);
+                    message << '[' << __LINE__ << "] cufft(irfft): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
+                showError(cuStreamSynchronize(d->stream));
                 if (auto result = cuMemcpyDtoHAsync(thread_data.h_spatial, d->d_spatial, spatial_size_bytes, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
-                    vsapi->freeFrame(src_frame);
+                    for (const auto & frame : src_frames) {
+                        vsapi->freeFrame(frame);
+                    }
                     showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
@@ -533,9 +566,12 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
+                showError(cuStreamSynchronize(d->stream));
                 if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
-                    vsapi->freeFrame(src_frame);
+                    for (const auto & frame : src_frames) {
+                        vsapi->freeFrame(frame);
+                    }
                     showError(cuCtxPopCurrent(nullptr));
                     std::ostringstream message;
                     const char * error_message;
@@ -546,7 +582,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
             }
 
-            col2im(thread_data.padded, thread_data.h_spatial, d->window, width, height, d->block_size, d->block_step);
+            col2im(thread_data.padded, thread_data.h_spatial, d->window, width, height, d->radius, d->block_size, d->block_step);
 
             int pad_width = calc_pad_size(width, d->block_size, d->block_step);
             int pad_height = calc_pad_size(height, d->block_size, d->block_step);
@@ -563,7 +599,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
         showError(cuCtxPopCurrent(nullptr));
 
-        vsapi->freeFrame(src_frame);
+        for (const auto & frame : src_frames) {
+            vsapi->freeFrame(frame);
+        }
 
         return dst_frame;
     }
@@ -584,8 +622,8 @@ static void VS_CC DFTTestFree(
         showError(cuMemFreeHost(thread_data.h_spatial));
     }
 
-    showError(cufftDestroy(d->irfft2d_handle));
-    showError(cufftDestroy(d->rfft2d_handle));
+    showError(cufftDestroy(d->irfft_handle));
+    showError(cufftDestroy(d->rfft_handle));
     showError(cuMemFree(d->d_frequency));
     showError(cuMemFree(d->d_spatial));
     if (d->zero_mean) {
@@ -625,6 +663,7 @@ static void VS_CC DFTTestCreate(
         if (vsapi->propNumElements(in, "window") != (2 * d->radius + 1) * square(d->block_size)) {
             vsapi->freeNode(d->node);
             vsapi->setError(out, "\"window\" must contain exactly (2*radius+1)*block_size^2 number of elements");
+            return ;
         }
         d->window = reinterpret_cast<float *>(std::malloc((2 * d->radius + 1) * square(d->block_size) * sizeof(float)));
         auto array = vsapi->propGetFloatArray(in, "window", nullptr);
@@ -777,7 +816,7 @@ static void VS_CC DFTTestCreate(
             return ;
         }
 
-        if (auto result = cuMemAlloc(&d->d_mean, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
+        if (auto result = cuMemAlloc(&d->d_mean, (2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
             std::free(d->window);
             showError(cuMemFree(d->d_spatial));
             showError(cuStreamDestroy(d->stream));
@@ -787,7 +826,7 @@ static void VS_CC DFTTestCreate(
             std::ostringstream message;
             const char * error_message;
             showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuMemAlloc(mean_patch): " << error_message;
+            message << '[' << __LINE__ << "] cuMemAlloc(mean): " << error_message;
             vsapi->setError(out, message.str().c_str());
             return ;
         }
@@ -806,7 +845,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuMemAlloc(&d->d_spatial, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float)); !success(result)) {
+    if (auto result = cuMemAlloc(&d->d_spatial, (2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float)); !success(result)) {
         std::free(d->window);
         showError(cuStreamDestroy(d->stream));
         showError(cuModuleUnload(d->module));
@@ -820,7 +859,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuMemAlloc(&d->d_frequency, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
+    if (auto result = cuMemAlloc(&d->d_frequency, (2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
         std::free(d->window);
         showError(cuMemFree(d->d_spatial));
         showError(cuStreamDestroy(d->stream));
@@ -836,7 +875,7 @@ static void VS_CC DFTTestCreate(
     }
 
     int batch = calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step);
-    if (auto result = cufftCreate(&d->rfft2d_handle); !success(result)) {
+    if (auto result = cufftCreate(&d->rfft_handle); !success(result)) {
         std::free(d->window);
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
@@ -845,16 +884,15 @@ static void VS_CC DFTTestCreate(
         showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
-        message << '[' << __LINE__ << "] cufftCreate(rfft2): " << cufftGetErrorString(result);
+        message << '[' << __LINE__ << "] cufftCreate(rfft): " << cufftGetErrorString(result);
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    {
+    if (d->radius == 0) {
         std::array<int, 2> n { d->block_size, d->block_size };
-        auto result = cufftPlanMany(&d->rfft2d_handle, 2, n.data(), nullptr, 1, square(d->block_size), nullptr, 1, d->block_size * (d->block_size / 2 + 1), CUFFT_R2C, batch);
-        if (!success(result)) {
+        if (auto result = cufftPlanMany(&d->rfft_handle, 2, n.data(), nullptr, 1, square(d->block_size), nullptr, 1, d->block_size * (d->block_size / 2 + 1), CUFFT_R2C, batch); !success(result)) {
             std::free(d->window);
-            showError(cufftDestroy(d->rfft2d_handle));
+            showError(cufftDestroy(d->rfft_handle));
             showError(cuMemFree(d->d_frequency));
             showError(cuMemFree(d->d_spatial));
             showError(cuStreamDestroy(d->stream));
@@ -866,10 +904,26 @@ static void VS_CC DFTTestCreate(
             vsapi->setError(out, message.str().c_str());
             return ;
         }
+    } else { // radius != 0
+        std::array<int, 3> n { 2 * d->radius + 1, d->block_size, d->block_size };
+        if (auto result = cufftPlanMany(&d->rfft_handle, 3, n.data(), nullptr, 1, (2 * d->radius + 1) * square(d->block_size), nullptr, 1, (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1), CUFFT_R2C, batch); !success(result)) {
+            std::free(d->window);
+            showError(cufftDestroy(d->rfft_handle));
+            showError(cuMemFree(d->d_frequency));
+            showError(cuMemFree(d->d_spatial));
+            showError(cuStreamDestroy(d->stream));
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftPlanMany(rfft3): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
     }
-    if (auto result = cufftSetStream(d->rfft2d_handle, d->stream); !success(result)) {
+    if (auto result = cufftSetStream(d->rfft_handle, d->stream); !success(result)) {
         std::free(d->window);
-        showError(cufftDestroy(d->rfft2d_handle));
+        showError(cufftDestroy(d->rfft_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
         showError(cuStreamDestroy(d->stream));
@@ -877,14 +931,14 @@ static void VS_CC DFTTestCreate(
         showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
-        message << '[' << __LINE__ << "] cufftSetStream(rfft2): " << cufftGetErrorString(result);
+        message << '[' << __LINE__ << "] cufftSetStream(rfft): " << cufftGetErrorString(result);
         vsapi->setError(out, message.str().c_str());
         return ;
     }
 
-    if (auto result = cufftCreate(&d->irfft2d_handle); !success(result)) {
+    if (auto result = cufftCreate(&d->irfft_handle); !success(result)) {
         std::free(d->window);
-        showError(cufftDestroy(d->rfft2d_handle));
+        showError(cufftDestroy(d->rfft_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
         showError(cuStreamDestroy(d->stream));
@@ -892,17 +946,17 @@ static void VS_CC DFTTestCreate(
         showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
-        message << '[' << __LINE__ << "] cufftCreate(irfft2): " << cufftGetErrorString(result);
+        message << '[' << __LINE__ << "] cufftCreate(irfft): " << cufftGetErrorString(result);
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    {
+    if (d->radius == 0) {
         std::array<int, 2> n { d->block_size, d->block_size };
-        auto result = cufftPlanMany(&d->irfft2d_handle, 2, n.data(), nullptr, 1, d->block_size * (d->block_size / 2 + 1), nullptr, 1, square(d->block_size), CUFFT_C2R, batch);
+        auto result = cufftPlanMany(&d->irfft_handle, 2, n.data(), nullptr, 1, d->block_size * (d->block_size / 2 + 1), nullptr, 1, square(d->block_size), CUFFT_C2R, batch);
         if (!success(result)) {
             std::free(d->window);
-            showError(cufftDestroy(d->irfft2d_handle));
-            showError(cufftDestroy(d->rfft2d_handle));
+            showError(cufftDestroy(d->irfft_handle));
+            showError(cufftDestroy(d->rfft_handle));
             showError(cuMemFree(d->d_frequency));
             showError(cuMemFree(d->d_spatial));
             showError(cuStreamDestroy(d->stream));
@@ -914,11 +968,29 @@ static void VS_CC DFTTestCreate(
             vsapi->setError(out, message.str().c_str());
             return ;
         }
+    } else { // radius != 0
+        std::array<int, 3> n { 2 * d->radius + 1, d->block_size, d->block_size };
+        auto result = cufftPlanMany(&d->irfft_handle, 3, n.data(), nullptr, 1, (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1), nullptr, 1, (2 * d->radius + 1) * square(d->block_size), CUFFT_C2R, batch);
+        if (!success(result)) {
+            std::free(d->window);
+            showError(cufftDestroy(d->irfft_handle));
+            showError(cufftDestroy(d->rfft_handle));
+            showError(cuMemFree(d->d_frequency));
+            showError(cuMemFree(d->d_spatial));
+            showError(cuStreamDestroy(d->stream));
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftPlanMany(irfft3): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
     }
-    if (auto result = cufftSetStream(d->irfft2d_handle, d->stream); !success(result)) {
+    if (auto result = cufftSetStream(d->irfft_handle, d->stream); !success(result)) {
         std::free(d->window);
-        showError(cufftDestroy(d->irfft2d_handle));
-        showError(cufftDestroy(d->rfft2d_handle));
+        showError(cufftDestroy(d->irfft_handle));
+        showError(cufftDestroy(d->rfft_handle));
         showError(cuMemFree(d->d_frequency));
         showError(cuMemFree(d->d_spatial));
         showError(cuStreamDestroy(d->stream));
@@ -926,10 +998,14 @@ static void VS_CC DFTTestCreate(
         showError(cuCtxPopCurrent(nullptr));
         vsapi->freeNode(d->node);
         std::ostringstream message;
-        message << '[' << __LINE__ << "] cufftSetStream(irfft2): " << cufftGetErrorString(result);
+        message << '[' << __LINE__ << "] cufftSetStream(irfft): " << cufftGetErrorString(result);
         vsapi->setError(out, message.str().c_str());
         return ;
     }
+    showError(cufftExecR2C(d->rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)));
+    showError(cufftExecC2R(d->irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)));
+    showError(cuStreamSynchronize(d->stream));
+    showError(cuCtxPopCurrent(nullptr));
 
     VSCoreInfo info;
     vsapi->getCoreInfo2(core, &info);
@@ -955,7 +1031,7 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
-        "zero_mean:int:opt;" // zero_mean related
+        "zero_mean:int:opt;"
         "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
     );

@@ -27,13 +27,13 @@ void remove_mean(
     // assume that blockDim.x % warpSize == 0
 
     __shared__ float storage[WARPS_PER_BLOCK];
-    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * (blockDim.x / warpSize)) {
+    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
         if (threadIdx.x % warpSize == 0) {
             storage[threadIdx.x / warpSize] = data[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2] / dftgc[0];
         }
         __syncwarp();
         float gf = storage[threadIdx.x / warpSize];
-        for (int j = threadIdx.x % warpSize; j < block_size * (block_size / 2 + 1) * 2; j += warpSize) {
+        for (int j = threadIdx.x % warpSize; j < (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2; j += warpSize) {
             float val = gf * dftgc[j];
             mean_patch[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2 + j] = val;
             data[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2 + j] -= val;
@@ -59,17 +59,20 @@ void add_mean(
 extern "C"
 __global__
 void frequency_filtering(
-    float2 * data, 
-    int size, 
+    float2 * data,
+    int size,
+    int radius,
     int block_size_1d
 ) {
 
     int block_size_x = block_size_1d / 2 + 1;
     int block_size_y = block_size_1d;
     int block_size_2d = block_size_y * block_size_x;
+    int block_size_z = radius;
+    int block_size_3d = block_size_z * block_size_2d;
 
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += blockDim.x * gridDim.x) {
-        filter(&data[i], i % block_size_x, (i % block_size_2d) / block_size_x, 0, i / block_size_2d);
+        filter(&data[i], i % block_size_x, (i % block_size_2d) / block_size_x, (i % block_size_3d) / block_size_2d, i);
     }
 }
 )""";
