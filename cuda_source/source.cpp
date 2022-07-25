@@ -93,7 +93,7 @@ static T square(const T & x) {
 }
 
 static int calc_pad_size(int size, int block_size, int block_step) {
-    return size + block_size - (size % block_size) + std::max(block_size - block_step, block_step) * 2;
+    return size + ((size % block_size) ? block_size - size % block_size : 0) + std::max(block_size - block_step, block_step) * 2;
 }
 
 static int calc_pad_num(int size, int block_size, int block_step) {
@@ -187,7 +187,7 @@ static void col2im(
         for (int j = 0; j < horizontal_num; j++) {
             for (int k = 0; k < block_size; k++) {
                 for (int l = 0; l < block_size; l++) {
-                    dst[(i * block_step + k) * horizontal_size + j * block_step + l] += 
+                    dst[(i * block_step + k) * horizontal_size + j * block_step + l] +=
                         src[((i * horizontal_num + j) * block_size + k) * block_size + l] *
                         window[k * block_size + l];
                 }
@@ -197,8 +197,9 @@ static void col2im(
 }
 
 static std::variant<CUmodule, std::string> compile(
-    const char * kernel,
-    CUdevice device
+    const char * user_kernel,
+    CUdevice device,
+    bool zero_mean
 ) {
 
     int major;
@@ -227,8 +228,12 @@ static std::variant<CUmodule, std::string> compile(
     bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
 
     std::ostringstream kernel_source;
-    kernel_source << kernel_header_template;
-    kernel_source << kernel;
+    if (zero_mean) {
+        kernel_source << "#define ZERO_MEAN 1\n";
+        kernel_source << "#define WARPS_PER_BLOCK 4\n";
+    }
+    kernel_source << user_kernel;
+    kernel_source << kernel_implementation;
 
     nvrtcProgram program;
     if (auto result = nvrtcCreateProgram(&program, kernel_source.str().c_str(), nullptr, 0, nullptr, nullptr); result != NVRTC_SUCCESS) {
@@ -299,15 +304,18 @@ struct DFTTestThreadData {
 
 struct DFTTestData {
     VSNodeRef * node;
+    float * window;
+    int radius;
     int block_size;
     int block_step;
-    float * window;
+    bool zero_mean;
     CUdevice device; // device_id
 
     CUcontext context; // use primary stream for interoperability
     CUstream stream;
     CUdeviceptr d_spatial; // shape: (pad_height, pad_width)
     CUdeviceptr d_frequency; // (vertical_num, horizontal_num, block_size, block_size/2+1)
+    CUdeviceptr d_mean; // (vertical_num, horizontal_num, block_size, block_size/2+1)
     std::mutex lock; // TODO: replace by `num_streams`
 
     cufftHandle rfft2d_handle;
@@ -315,6 +323,11 @@ struct DFTTestData {
 
     CUmodule module;
     CUfunction filter_kernel;
+    int filter_num_blocks;
+    CUfunction remove_mean_kernel;
+    int remove_mean_num_blocks;
+    CUfunction add_mean_kernel;
+    int add_mean_num_blocks;
 
     std::atomic<int> num_uninitialized_threads;
     std::unordered_map<std::thread::id, DFTTestThreadData> thread_data;
@@ -423,9 +436,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
             auto srcp = vsapi->getReadPtr(src_frame, plane);
             reflection_padding(
-                thread_data.padded, 
-                reinterpret_cast<const float *>(srcp), 
-                width, height, stride, 
+                thread_data.padded,
+                reinterpret_cast<const float *>(srcp),
+                width, height, stride,
                 d->block_size, d->block_step
             );
 
@@ -455,10 +468,25 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
+                if (d->zero_mean) {
+                    int num_blocks = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step);
+                    void * params[] { &d->d_frequency, &d->d_mean, &num_blocks, &d->radius, &d->block_size };
+                    if (auto result = cuLaunchKernel(d->remove_mean_kernel, static_cast<unsigned int>(d->remove_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                        vsapi->freeFrame(dst_frame);
+                        vsapi->freeFrame(src_frame);
+                        showError(cuCtxPopCurrent(nullptr));
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuLaunchKernel(remove_mean): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
+                }
                 {
                     int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1);
                     void * params[] { &d->d_frequency, &frequency_size, &d->block_size };
-                    if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>((frequency_size + 127) / 128), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                    if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         vsapi->freeFrame(dst_frame);
                         vsapi->freeFrame(src_frame);
                         showError(cuCtxPopCurrent(nullptr));
@@ -466,6 +494,21 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
                         message << '[' << __LINE__ << "] cuLaunchKernel(frequency_filtering): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
+                }
+                if (d->zero_mean) {
+                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * 2;
+                    void * params[] { &d->d_frequency, &d->d_mean, &frequency_size };
+                    if (auto result = cuLaunchKernel(d->add_mean_kernel, static_cast<unsigned int>(d->add_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                        vsapi->freeFrame(dst_frame);
+                        vsapi->freeFrame(src_frame);
+                        showError(cuCtxPopCurrent(nullptr));
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuLaunchKernel(add_mean): " << error_message;
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
@@ -512,8 +555,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
             auto dstp = vsapi->getWritePtr(dst_frame, plane);
             vs_bitblt(
-                dstp, stride * sizeof(float), 
-                &thread_data.padded[offset_y * pad_width + offset_x], pad_width * sizeof(float), 
+                dstp, stride * sizeof(float),
+                &thread_data.padded[offset_y * pad_width + offset_x], pad_width * sizeof(float),
                 width * sizeof(float), height
             );
         }
@@ -545,6 +588,9 @@ static void VS_CC DFTTestFree(
     showError(cufftDestroy(d->rfft2d_handle));
     showError(cuMemFree(d->d_frequency));
     showError(cuMemFree(d->d_spatial));
+    if (d->zero_mean) {
+        showError(cuMemFree(d->d_mean));
+    }
     showError(cuStreamDestroy(d->stream));
     showError(cuModuleUnload(d->module));
     showError(cuDevicePrimaryCtxRelease(d->device));
@@ -561,11 +607,30 @@ static void VS_CC DFTTestCreate(
     d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
     auto vi = vsapi->getVideoInfo(d->node);
 
+    auto user_kernel = vsapi->propGetData(in, "kernel", 0, nullptr);
+
     int error;
+
+    d->radius = int64ToIntS(vsapi->propGetInt(in, "radius", 0, &error));
+    if (error) {
+        d->radius = 0;
+    }
 
     d->block_size = int64ToIntS(vsapi->propGetInt(in, "block_size", 0, &error));
     if (error) {
         d->block_size = 8;
+    }
+
+    {
+        if (vsapi->propNumElements(in, "window") != (2 * d->radius + 1) * square(d->block_size)) {
+            vsapi->freeNode(d->node);
+            vsapi->setError(out, "\"window\" must contain exactly (2*radius+1)*block_size^2 number of elements");
+        }
+        d->window = reinterpret_cast<float *>(std::malloc((2 * d->radius + 1) * square(d->block_size) * sizeof(float)));
+        auto array = vsapi->propGetFloatArray(in, "window", nullptr);
+        for (int i = 0; i < (2 * d->radius + 1) * square(d->block_size); i++) {
+            d->window[i] = static_cast<float>(array[i]);
+        }
     }
 
     d->block_step = int64ToIntS(vsapi->propGetInt(in, "block_step", 0, &error));
@@ -573,16 +638,9 @@ static void VS_CC DFTTestCreate(
         d->block_step = d->block_size;
     }
 
-    {
-        if (vsapi->propNumElements(in, "window") != square(d->block_size)) {
-            vsapi->freeNode(d->node);
-            vsapi->setError(out, "\"window\" must contain exactly block_size^2 number of elements");
-        }
-        d->window = reinterpret_cast<float *>(std::malloc(square(d->block_size) * sizeof(float)));
-        auto array = vsapi->propGetFloatArray(in, "window", nullptr);
-        for (int i = 0; i < square(d->block_size); i++) {
-            d->window[i] = array[i];
-        }
+    d->zero_mean = !!vsapi->propGetInt(in, "zero_mean", 0, &error);
+    if (error) {
+        d->zero_mean = false;
     }
 
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
@@ -634,8 +692,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    auto kernel_source = vsapi->propGetData(in, "kernel", 0, nullptr);
-    auto compilation = compile(kernel_source, d->device);
+    auto compilation = compile(user_kernel, d->device, d->zero_mean);
     if (std::holds_alternative<std::string>(compilation)) {
         std::free(d->window);
         showError(cuCtxPopCurrent(nullptr));
@@ -657,6 +714,83 @@ static void VS_CC DFTTestCreate(
         message << '[' << __LINE__ << "] cuModuleGetFunction(frequency_filtering): " << error_message;
         vsapi->setError(out, message.str().c_str());
         return ;
+    }
+    if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->filter_num_blocks, d->filter_kernel, 128, 0); !success(result)) {
+        std::free(d->window);
+        showError(cuModuleUnload(d->module));
+        showError(cuCtxPopCurrent(nullptr));
+        vsapi->freeNode(d->node);
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(frequency_filtering): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (d->zero_mean) {
+        if (auto result = cuModuleGetFunction(&d->remove_mean_kernel, d->module, "remove_mean"); !success(result)) {
+            std::free(d->window);
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuModuleGetFunction(remove_mean): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->remove_mean_num_blocks, d->remove_mean_kernel, 128, 0); !success(result)) {
+            std::free(d->window);
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(remove_mean): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        if (auto result = cuModuleGetFunction(&d->add_mean_kernel, d->module, "add_mean"); !success(result)) {
+            std::free(d->window);
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuModuleGetFunction(add_mean): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->add_mean_num_blocks, d->add_mean_kernel, 128, 0); !success(result)) {
+            std::free(d->window);
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(add_mean): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+
+        if (auto result = cuMemAlloc(&d->d_mean, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
+            std::free(d->window);
+            showError(cuMemFree(d->d_spatial));
+            showError(cuStreamDestroy(d->stream));
+            showError(cuModuleUnload(d->module));
+            showError(cuCtxPopCurrent(nullptr));
+            vsapi->freeNode(d->node);
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuMemAlloc(mean_patch): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
     }
 
     if (auto result = cuStreamCreate(&d->stream, CU_STREAM_NON_BLOCKING); !success(result)) {
@@ -803,8 +937,8 @@ static void VS_CC DFTTestCreate(
     d->thread_data.reserve(info.numThreads);
 
     vsapi->createFilter(
-        in, out, "DFTTest", 
-        DFTTestInit, DFTTestGetFrame, DFTTestFree, 
+        in, out, "DFTTest",
+        DFTTestInit, DFTTestGetFrame, DFTTestFree,
         fmParallel, 0, d.release(), core
     );
 }
@@ -814,14 +948,15 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
     configFunc("io.github.amusementclub.dfttest2_cuda", "dfttest2_cuda", "DFTTest2 (CUDA)", VAPOURSYNTH_API_VERSION, 1, plugin);
 
     registerFunc(
-        "DFTTest", 
+        "DFTTest",
         "clip:clip;"
         "kernel:data[];"
         "window:float[];"
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
-        "device_id:int:opt;", 
+        "zero_mean:int:opt;" // zero_mean related
+        "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
     );
 }
