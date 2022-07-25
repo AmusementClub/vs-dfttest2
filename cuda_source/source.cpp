@@ -503,7 +503,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
-                    showError(cuStreamSynchronize(d->stream));
                 }
                 {
                     int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1);
@@ -521,7 +520,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
-                    showError(cuStreamSynchronize(d->stream));
                 }
                 if (d->zero_mean) {
                     int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1) * 2;
@@ -539,7 +537,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
-                    showError(cuStreamSynchronize(d->stream));
                 }
                 if (auto result = cufftExecC2R(d->irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)); !success(result)) {
                     vsapi->freeFrame(dst_frame);
@@ -552,7 +549,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-                showError(cuStreamSynchronize(d->stream));
                 if (auto result = cuMemcpyDtoHAsync(thread_data.h_spatial, d->d_spatial, spatial_size_bytes, d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     for (const auto & frame : src_frames) {
@@ -566,7 +562,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-                showError(cuStreamSynchronize(d->stream));
                 if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
                     vsapi->freeFrame(dst_frame);
                     for (const auto & frame : src_frames) {
@@ -1002,9 +997,7 @@ static void VS_CC DFTTestCreate(
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    showError(cufftExecR2C(d->rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial), reinterpret_cast<cufftComplex *>(d->d_frequency)));
-    showError(cufftExecC2R(d->irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency), reinterpret_cast<cufftReal *>(d->d_spatial)));
-    showError(cuStreamSynchronize(d->stream));
+
     showError(cuCtxPopCurrent(nullptr));
 
     VSCoreInfo info;
