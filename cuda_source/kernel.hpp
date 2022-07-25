@@ -7,72 +7,71 @@ static const auto kernel_implementation = R"""(
 #endif // __CUDACC_RTC__
 
 __device__
-extern void filter(float2 * value, int x, int y, int z, int id);
+extern void filter(float2 & value, int x, int y, int z);
+
+// WARPS_PER_BLOCK
 
 #ifdef ZERO_MEAN
 // __device__ const float dftgc[];
-// NUM_WARPS
-
-extern "C"
-__global__
-void remove_mean(
-    float * __restrict__ data, // re-interpret complex as float for coallesced access
-    float * __restrict__ mean_patch,
-    int num_blocks,
-    int radius,
-    int block_size
-) {
-
-    // each warp is responsible for a single block
-    // assume that blockDim.x % warpSize == 0
-
-    __shared__ float storage[WARPS_PER_BLOCK];
-    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
-        if (threadIdx.x % warpSize == 0) {
-            storage[threadIdx.x / warpSize] = data[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2] / dftgc[0];
-        }
-        __syncwarp();
-        float gf = storage[threadIdx.x / warpSize];
-        for (int j = threadIdx.x % warpSize; j < (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2; j += warpSize) {
-            float val = gf * dftgc[j];
-            mean_patch[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2 + j] = val;
-            data[i * (2 * radius + 1) * block_size * (block_size / 2 + 1) * 2 + j] -= val;
-        }
-        __syncwarp();
-    }
-}
-
-extern "C"
-__global__
-void add_mean(
-    float * __restrict__ data, // re-interpret complex as float for coallesced access
-    const float * __restrict__ mean_patch,
-    int size
-) {
-
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += blockDim.x * gridDim.x) {
-        data[i] += mean_patch[i];
-    }
-}
 #endif // ZERO_MEAN
 
 extern "C"
 __global__
 void frequency_filtering(
     float2 * data,
-    int size,
+    int num_blocks,
     int radius,
     int block_size_1d
 ) {
 
-    int block_size_x = block_size_1d / 2 + 1;
-    int block_size_y = block_size_1d;
-    int block_size_2d = block_size_y * block_size_x;
-    int block_size_z = radius;
-    int block_size_3d = block_size_z * block_size_2d;
+    // each warp is responsible for a single block
+    // assume that blockDim.x % warpSize == 0
 
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += blockDim.x * gridDim.x) {
-        filter(&data[i], i % block_size_x, (i % block_size_2d) / block_size_x, (i % block_size_3d) / block_size_2d, i);
+#ifdef ZERO_MEAN
+    __shared__ float storage[WARPS_PER_BLOCK];
+#endif // ZERO_MEAN
+
+    int block_size_x = block_size_1d / 2 + 1;
+    int block_size_2d = block_size_1d * block_size_x;
+    int block_size_3d = (2 * radius + 1) * block_size_2d;
+
+    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
+#ifdef ZERO_MEAN
+        __syncwarp();
+        if (threadIdx.x % warpSize == 0) {
+            storage[threadIdx.x / warpSize] = data[i * block_size_3d].x / dftgc[0];
+        }
+        __syncwarp();
+        float gf = storage[threadIdx.x / warpSize];
+        __syncwarp();
+#endif // ZERO_MEAN
+
+        for (int j = threadIdx.x % warpSize; j < block_size_3d; j += warpSize) {
+            float2 local_data = data[i * block_size_3d + j];
+
+#ifdef ZERO_MEAN
+            // remove mean
+            float val1 = gf * dftgc[j * 2];
+            float val2 = gf * dftgc[j * 2 + 1];
+            local_data.x -= val1;
+            local_data.y -= val2;
+#endif // ZERO_MEAN
+
+            filter(
+                local_data,
+                j % block_size_x,
+                (j % block_size_2d) / block_size_x,
+                (j % block_size_3d) / block_size_2d
+            );
+
+#ifdef ZERO_MEAN
+            // add mean
+            local_data.x += val1;
+            local_data.y += val2;
+#endif // ZERO_MEAN
+
+            data[i * block_size_3d + j] = local_data;
+        }
     }
 }
 )""";

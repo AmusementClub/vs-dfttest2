@@ -342,8 +342,8 @@ static std::variant<CUmodule, std::string> compile(
     std::ostringstream kernel_source;
     if (zero_mean) {
         kernel_source << "#define ZERO_MEAN 1\n";
-        kernel_source << "#define WARPS_PER_BLOCK 4\n";
     }
+    kernel_source << "#define WARPS_PER_BLOCK 4\n";
     kernel_source << user_kernel;
     kernel_source << kernel_implementation;
 
@@ -416,14 +416,12 @@ struct DFTTestData {
     int radius;
     int block_size;
     int block_step;
-    bool zero_mean;
     CUdevice device; // device_id
 
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial; // shape: (pad_height, pad_width)
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency; // (vertical_num, horizontal_num, block_size, block_size/2+1)
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_mean; // (vertical_num, horizontal_num, block_size, block_size/2+1)
     std::mutex lock; // TODO: replace by `num_streams`
 
     Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle; // 2-D or 3-D, depends on radius
@@ -432,10 +430,6 @@ struct DFTTestData {
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction filter_kernel;
     int filter_num_blocks;
-    CUfunction remove_mean_kernel;
-    int remove_mean_num_blocks;
-    CUfunction add_mean_kernel;
-    int add_mean_num_blocks;
 
     std::atomic<int> num_uninitialized_threads;
     std::unordered_map<std::thread::id, DFTTestThreadData> thread_data;
@@ -541,7 +535,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
         std::vector<std::unique_ptr<const VSFrameRef, decltype(vsapi->freeFrame)>> src_frames;
         src_frames.reserve(2 * d->radius + 1);
-        for (int i = n - d->radius; i <= d->radius; i++) {
+        for (int i = n - d->radius; i <= n + d->radius; i++) {
             src_frames.emplace_back(
                 vsapi->getFrameFilter(std::clamp(i, 0, vi->numFrames - 1), d->node, frameCtx),
                 vsapi->freeFrame
@@ -590,38 +584,14 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-                if (d->zero_mean) {
-                    int num_blocks = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step);
-                    void * params[] { &d->d_frequency, &d->d_mean, &num_blocks, &d->radius, &d->block_size };
-                    if (auto result = cuLaunchKernel(d->remove_mean_kernel, static_cast<unsigned int>(d->remove_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
-                        std::ostringstream message;
-                        const char * error_message;
-                        showError(cuGetErrorString(result, &error_message));
-                        message << '[' << __LINE__ << "] cuLaunchKernel(remove_mean): " << error_message;
-                        vsapi->setFilterError(message.str().c_str(), frameCtx);
-                        return nullptr;
-                    }
-                }
                 {
-                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1);
-                    void * params[] { &d->d_frequency, &frequency_size, &d->radius, &d->block_size };
+                    int num_blocks = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step);
+                    void * params[] { &d->d_frequency, &num_blocks, &d->radius, &d->block_size };
                     if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         std::ostringstream message;
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
                         message << '[' << __LINE__ << "] cuLaunchKernel(frequency_filtering): " << error_message;
-                        vsapi->setFilterError(message.str().c_str(), frameCtx);
-                        return nullptr;
-                    }
-                }
-                if (d->zero_mean) {
-                    int frequency_size = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1) * 2;
-                    void * params[] { &d->d_frequency, &d->d_mean, &frequency_size };
-                    if (auto result = cuLaunchKernel(d->add_mean_kernel, static_cast<unsigned int>(d->add_mean_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
-                        std::ostringstream message;
-                        const char * error_message;
-                        showError(cuGetErrorString(result, &error_message));
-                        message << '[' << __LINE__ << "] cuLaunchKernel(add_mean): " << error_message;
                         vsapi->setFilterError(message.str().c_str(), frameCtx);
                         return nullptr;
                     }
@@ -744,9 +714,9 @@ static void VS_CC DFTTestCreate(
         d->block_step = d->block_size;
     }
 
-    d->zero_mean = !!vsapi->propGetInt(in, "zero_mean", 0, &error);
+    bool zero_mean = !!vsapi->propGetInt(in, "zero_mean", 0, &error);
     if (error) {
-        d->zero_mean = false;
+        zero_mean = false;
     }
 
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
@@ -795,7 +765,7 @@ static void VS_CC DFTTestCreate(
 
     context_pushed = true;
 
-    auto compilation = compile(user_kernel, d->device, d->zero_mean);
+    auto compilation = compile(user_kernel, d->device, zero_mean);
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -818,49 +788,6 @@ static void VS_CC DFTTestCreate(
         message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(frequency_filtering): " << error_message;
         vsapi->setError(out, message.str().c_str());
         return ;
-    }
-    if (d->zero_mean) {
-        if (auto result = cuModuleGetFunction(&d->remove_mean_kernel, d->module, "remove_mean"); !success(result)) {
-            std::ostringstream message;
-            const char * error_message;
-            showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuModuleGetFunction(remove_mean): " << error_message;
-            vsapi->setError(out, message.str().c_str());
-            return ;
-        }
-        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->remove_mean_num_blocks, d->remove_mean_kernel, 128, 0); !success(result)) {
-            std::ostringstream message;
-            const char * error_message;
-            showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(remove_mean): " << error_message;
-            vsapi->setError(out, message.str().c_str());
-            return ;
-        }
-        if (auto result = cuModuleGetFunction(&d->add_mean_kernel, d->module, "add_mean"); !success(result)) {
-            std::ostringstream message;
-            const char * error_message;
-            showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuModuleGetFunction(add_mean): " << error_message;
-            vsapi->setError(out, message.str().c_str());
-            return ;
-        }
-        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->add_mean_num_blocks, d->add_mean_kernel, 128, 0); !success(result)) {
-            std::ostringstream message;
-            const char * error_message;
-            showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(add_mean): " << error_message;
-            vsapi->setError(out, message.str().c_str());
-            return ;
-        }
-
-        if (auto result = cuMemAlloc(&d->d_mean.data, (2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * d->block_size * (d->block_size / 2 + 1) * sizeof(cufftComplex)); !success(result)) {
-            std::ostringstream message;
-            const char * error_message;
-            showError(cuGetErrorString(result, &error_message));
-            message << '[' << __LINE__ << "] cuMemAlloc(mean): " << error_message;
-            vsapi->setError(out, message.str().c_str());
-            return ;
-        }
     }
 
     if (auto result = cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING); !success(result)) {

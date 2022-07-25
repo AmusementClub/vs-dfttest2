@@ -201,7 +201,7 @@ def DFTTest(
     __device__ static const float dftgc[] { ${dftgc} };
 
     __device__
-    static void filter(float2 * value, int x, int y, int z, int id) {
+    static void filter(float2 & value, int x, int y, int z) {
         float sigma = static_cast<float>(${sigma});
         [[maybe_unused]] float sigma2 = static_cast<float>(${sigma2});
         [[maybe_unused]] float pmin = static_cast<float>(${pmin});
@@ -209,17 +209,17 @@ def DFTTest(
         [[maybe_unused]] float multiplier {};
 
     #if FILTER_TYPE == 2
-        value->x *= sigma;
-        value->y *= sigma;
+        value.x *= sigma;
+        value.y *= sigma;
         return ;
     #endif
 
-        float psd = (value->x * value->x + value->y * value->y) * (255.0f * 255.0f);
+        float psd = (value.x * value.x + value.y * value.y) * (255.0f * 255.0f);
 
     #if FILTER_TYPE == 1
         if (psd < sigma) {
-            value->x = 0.0f;
-            value->y = 0.0f;
+            value.x = 0.0f;
+            value.y = 0.0f;
         }
         return ;
     #elif FILTER_TYPE == 0
@@ -238,8 +238,8 @@ def DFTTest(
         multiplier = sqrtf(fmaxf((psd - sigma) / (psd + 1e-15f), 0.0f));
     #endif
 
-        value->x *= multiplier;
-        value->y *= multiplier;
+        value.x *= multiplier;
+        value.y *= multiplier;
     }
     """
     ).substitute(
