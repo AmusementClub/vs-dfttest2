@@ -142,7 +142,8 @@ def DFTTest(
     sbeta: float = 2.5,
     tbeta: float = 2.5,
     zmean: bool = True,
-    f0beta: float = 1.0
+    f0beta: float = 1.0,
+    device_id: int = 0
 ) -> vs.VideoNode:
 
     if any((
@@ -257,5 +258,6 @@ def DFTTest(
         block_size=block_size,
         radius=radius,
         block_step=block_step,
-        zero_mean=zero_mean
+        zero_mean=zero_mean,
+        device_id=device_id
     )
