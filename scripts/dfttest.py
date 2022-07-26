@@ -189,7 +189,7 @@ def DFTTest(
     if ftype < 2:
         sigma *= wscale
         sigma2 *= wscale
-    
+
     pmin *= wscale
     pmax *= wscale
 
@@ -203,6 +203,8 @@ def DFTTest(
     #if ZERO_MEAN
     __device__ static const float dftgc[] { ${dftgc} };
     #endif // ZERO_MEAN
+
+    __device__ static const float window[] { ${window} };
 
     __device__
     static void filter(float2 & value, int x, int y, int z) {
@@ -247,13 +249,14 @@ def DFTTest(
     }
     """
     ).substitute(
-        sigma=sigma,
-        sigma2=sigma2,
-        pmin=pmin,
-        pmax=pmax,
-        filter_type=filter_type,
-        dftgc=','.join(map(str, dftgc)),
-        zero_mean=zero_mean
+        sigma=float(sigma),
+        sigma2=float(sigma2),
+        pmin=float(pmin),
+        pmax=float(pmax),
+        filter_type=int(filter_type),
+        dftgc=','.join(str(float(x)) for x in dftgc),
+        zero_mean=int(zero_mean),
+        window=','.join(str(float(x)) for x in window),
     )
 
     return core.dfttest2_cuda.DFTTest(
