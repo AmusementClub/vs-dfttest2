@@ -254,60 +254,6 @@ static void reflection_padding(
     }
 }
 
-static void im2col(
-    float * VS_RESTRICT dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    const float * VS_RESTRICT srcp, // shape: (vertical_size, horizontal_size)
-    const float * VS_RESTRICT window, // shape: (2*radius+1, block_size, block_size)
-    int width, int height,
-    int radius, int temporal_id,
-    int block_size, int block_step
-) {
-
-    int horizontal_num = calc_pad_num(width, block_size, block_step);
-    int vertical_num = calc_pad_num(height, block_size, block_step);
-    int horizontal_size = calc_pad_size(width, block_size, block_step);
-
-    for (int i = 0; i < vertical_num; i++) {
-        for (int j = 0; j < horizontal_num; j++) {
-            auto src = &srcp[i * block_step * horizontal_size + j * block_step];
-            for (int k = 0; k < block_size; k++) {
-                for (int l = 0; l < block_size; l++) {
-                    dstp[k * block_size + l] = src[k * horizontal_size + l] * window[(temporal_id * block_size + k) * block_size + l];
-                }
-            }
-            dstp += (2 * radius + 1) * square(block_size);
-        }
-    }
-}
-
-static void col2im(
-    float * VS_RESTRICT dst, // shape: (vertical_size, horizontal_size)
-    const float * VS_RESTRICT src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    const float * VS_RESTRICT window, // shape: (2*radius+1, block_size, block_size)
-    int width, int height,
-    int radius,
-    int block_size, int block_step
-) {
-
-    int horizontal_size = calc_pad_size(width, block_size, block_step);
-    int horizontal_num = calc_pad_num(width, block_size, block_step);
-    int vertical_size = calc_pad_size(height, block_size, block_step);
-    int vertical_num = calc_pad_num(height, block_size, block_step);
-
-    std::memset(dst, 0, vertical_size * horizontal_size * sizeof(float));
-    for (int i = 0; i < vertical_num; i++) {
-        for (int j = 0; j < horizontal_num; j++) {
-            for (int k = 0; k < block_size; k++) {
-                for (int l = 0; l < block_size; l++) {
-                    dst[(i * block_step + k) * horizontal_size + j * block_step + l] +=
-                        src[(((i * horizontal_num + j) * (2 * radius + 1) + radius) * block_size + k) * block_size + l] *
-                        window[(radius * block_size + k) * block_size + l];
-                }
-            }
-        }
-    }
-}
-
 static std::variant<CUmodule, std::string> compile(
     const char * user_kernel,
     CUdevice device
@@ -401,8 +347,7 @@ static std::variant<CUmodule, std::string> compile(
 
 
 struct DFTTestThreadData {
-    float * padded; // shape: (pad_height, pad_width)
-    float * h_spatial;
+    float * h_padded; // shape: (pad_height, pad_width)
 };
 
 
@@ -416,8 +361,9 @@ struct DFTTestData {
 
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial; // shape: (pad_height, pad_width)
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency; // (vertical_num, horizontal_num, block_size, block_size/2+1)
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_padded; // shape: (pad_height, pad_width)
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial; // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency; // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size/2+1)
     std::mutex lock; // TODO: replace by `num_streams`
 
     Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle; // 2-D or 3-D, depends on radius
@@ -426,6 +372,9 @@ struct DFTTestData {
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction filter_kernel;
     int filter_num_blocks;
+    CUfunction im2col_kernel;
+    int im2col_num_blocks;
+    CUfunction col2im_kernel;
 
     std::atomic<int> num_uninitialized_threads;
     std::unordered_map<std::thread::id, DFTTestThreadData> thread_data;
@@ -490,32 +439,15 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
             if (!initialized) {
                 auto padded_size = (
+                    (2 * d->radius + 1) *
                     calc_pad_size(vi->height, d->block_size, d->block_step) *
                     calc_pad_size(vi->width, d->block_size, d->block_step) *
                     sizeof(float)
                 );
 
-                if (thread_data.padded = reinterpret_cast<float *>(std::malloc(padded_size)); !thread_data.padded) {
+                if (auto result = cuMemHostAlloc(reinterpret_cast<void **>(&thread_data.h_padded), padded_size, 0); result != CUDA_SUCCESS) {
                     std::ostringstream message;
-                    message << '[' << __LINE__ << "] malloc(h_padded) error";
-                    vsapi->setFilterError(message.str().c_str(), frameCtx);
-                    return nullptr;
-                }
-
-                auto spatial_size = (
-                    (2 * d->radius + 1) *
-                    calc_pad_num(vi->height, d->block_size, d->block_step) *
-                    calc_pad_num(vi->width, d->block_size, d->block_step) *
-                    square(d->block_size) *
-                    sizeof(float)
-                );
-
-                if (auto result = cuMemHostAlloc(reinterpret_cast<void **>(&thread_data.h_spatial), spatial_size, 0); !success(result)) {
-                    std::free(thread_data.padded);
-                    std::ostringstream message;
-                    const char * error_message;
-                    showError(cuGetErrorString(result, &error_message));
-                    message << '[' << __LINE__ << "] cuMemHostAlloc(): " << error_message;
+                    message << '[' << __LINE__ << "] cuMemHostAlloc(h_padded) error";
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
@@ -551,28 +483,42 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             int height = vsapi->getFrameHeight(src_center_frame.get(), plane);
             int stride = vsapi->getStride(src_center_frame.get(), plane) / sizeof(float);
 
+            auto padded_size_spatial = (
+                calc_pad_size(height, d->block_size, d->block_step) *
+                calc_pad_size(width, d->block_size, d->block_step)
+            );
+
             for (int i = 0; i < 2 * d->radius + 1; i++) {
                 auto srcp = vsapi->getReadPtr(src_frames[i].get(), plane);
                 reflection_padding(
-                    thread_data.padded,
+                    &thread_data.h_padded[i * padded_size_spatial],
                     reinterpret_cast<const float *>(srcp),
                     width, height, stride,
                     d->block_size, d->block_step
                 );
-                im2col(&thread_data.h_spatial[i * square(d->block_size)], thread_data.padded, d->window.get(), width, height, d->radius, i, d->block_size, d->block_step);
             }
 
             {
                 std::lock_guard lock { d->lock };
 
-                int spatial_size_bytes = (2 * d->radius + 1) * calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float);
-                if (auto result = cuMemcpyHtoDAsync(d->d_spatial, thread_data.h_spatial, spatial_size_bytes, d->stream); !success(result)) {
+                if (auto result = cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, (2 * d->radius + 1) * padded_size_spatial * sizeof(float), d->stream); !success(result)) {
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
                     message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
+                }
+                {
+                    void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height, &d->radius, &d->block_size, &d->block_step };
+                    if (auto result = cuLaunchKernel(d->im2col_kernel, static_cast<unsigned int>(d->im2col_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuLaunchKernel(im2col): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
                 }
                 if (auto result = cufftExecR2C(d->rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial.data), reinterpret_cast<cufftComplex *>(d->d_frequency.data)); !success(result)) {
                     std::ostringstream message;
@@ -582,7 +528,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
                 {
                     int num_blocks = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step);
-                    void * params[] { &d->d_frequency, &num_blocks, &d->radius, &d->block_size };
+                    void * params[] { &d->d_frequency.data, &num_blocks, &d->radius, &d->block_size };
                     if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         std::ostringstream message;
                         const char * error_message;
@@ -598,14 +544,49 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
                     return nullptr;
                 }
-                if (auto result = cuMemcpyDtoHAsync(thread_data.h_spatial, d->d_spatial, spatial_size_bytes, d->stream); !success(result)) {
-                    std::ostringstream message;
-                    const char * error_message;
-                    showError(cuGetErrorString(result, &error_message));
-                    message << '[' << __LINE__ << "] cuMemcpyDtoHAsync(): " << error_message;
-                    vsapi->setFilterError(message.str().c_str(), frameCtx);
-                    return nullptr;
+                {
+                    void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height, &d->radius, &d->block_size, &d->block_step };
+                    unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
+                    unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
+                    if (auto result = cuLaunchKernel(d->col2im_kernel, (horizontal_size + 31) / 32, (vertical_size + 3) / 4, 1, 32, 4, 1, 0, d->stream, params, nullptr); !success(result)) {
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuLaunchKernel(col2im): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
                 }
+                {
+                    const CUDA_MEMCPY3D config {
+                        .srcXInBytes = (calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * sizeof(float),
+                        .srcY = static_cast<size_t>((calc_pad_size(height, d->block_size, d->block_step) - height) / 2),
+                        .srcZ = static_cast<size_t>(d->radius),
+                        .srcMemoryType = CU_MEMORYTYPE_DEVICE,
+                        .srcDevice = d->d_padded.data,
+                        .srcPitch = calc_pad_size(width, d->block_size, d->block_step) * sizeof(float),
+                        .srcHeight = static_cast<size_t>(calc_pad_size(height, d->block_size, d->block_step)),
+                        .dstXInBytes = (calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * sizeof(float),
+                        .dstY = static_cast<size_t>((calc_pad_size(height, d->block_size, d->block_step) - height) / 2),
+                        .dstZ = 0, // vs_bitblt(dstp) copied from the 0-th slice
+                        .dstMemoryType = CU_MEMORYTYPE_HOST,
+                        .dstHost = thread_data.h_padded,
+                        .dstPitch = calc_pad_size(width, d->block_size, d->block_step) * sizeof(float),
+                        .dstHeight = static_cast<size_t>(calc_pad_size(height, d->block_size, d->block_step)),
+                        .WidthInBytes = width * sizeof(float),
+                        .Height = static_cast<size_t>(height),
+                        .Depth = 1
+                    };
+                    if (auto result = cuMemcpy3DAsync(&config, d->stream); !success(result)) {
+                        std::ostringstream message;
+                        const char * error_message;
+                        showError(cuGetErrorString(result, &error_message));
+                        message << '[' << __LINE__ << "] cuMemcpy3DAsync(DtoH): " << error_message;
+                        vsapi->setFilterError(message.str().c_str(), frameCtx);
+                        return nullptr;
+                    }
+                }
+
                 if (auto result = cuStreamSynchronize(d->stream); !success(result)) {
                     std::ostringstream message;
                     const char * error_message;
@@ -616,8 +597,6 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
             }
 
-            col2im(thread_data.padded, thread_data.h_spatial, d->window.get(), width, height, d->radius, d->block_size, d->block_step);
-
             int pad_width = calc_pad_size(width, d->block_size, d->block_step);
             int pad_height = calc_pad_size(height, d->block_size, d->block_step);
             int offset_y = (pad_height - height) / 2;
@@ -626,7 +605,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             auto dstp = vsapi->getWritePtr(dst_frame.get(), plane);
             vs_bitblt(
                 dstp, stride * sizeof(float),
-                &thread_data.padded[offset_y * pad_width + offset_x], pad_width * sizeof(float),
+                &thread_data.h_padded[offset_y * pad_width + offset_x], pad_width * sizeof(float),
                 width * sizeof(float), height
             );
         }
@@ -648,8 +627,7 @@ static void VS_CC DFTTestFree(
     showError(cuCtxPushCurrent(d->context));
 
     for (const auto & [_, thread_data] : d->thread_data) {
-        std::free(thread_data.padded);
-        showError(cuMemFreeHost(thread_data.h_spatial));
+        showError(cuMemFreeHost(thread_data.h_padded));
     }
 
     delete d;
@@ -763,15 +741,6 @@ static void VS_CC DFTTestCreate(
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    d->module = std::get<CUmodule>(compilation);
-    if (auto result = cuModuleGetFunction(&d->filter_kernel, d->module, "frequency_filtering"); !success(result)) {
-        std::ostringstream message;
-        const char * error_message;
-        showError(cuGetErrorString(result, &error_message));
-        message << '[' << __LINE__ << "] cuModuleGetFunction(frequency_filtering): " << error_message;
-        vsapi->setError(out, message.str().c_str());
-        return ;
-    }
 
     int num_sms;
     if (auto result = cuDeviceGetAttribute(&num_sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, d->device); !success(result)) {
@@ -782,16 +751,57 @@ static void VS_CC DFTTestCreate(
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    int max_blocks_per_sm;
-    if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->filter_kernel, 128, 0); !success(result)) {
+
+    d->module = std::get<CUmodule>(compilation);
+
+    if (auto result = cuModuleGetFunction(&d->filter_kernel, d->module, "frequency_filtering"); !success(result)) {
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
-        message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(frequency_filtering): " << error_message;
+        message << '[' << __LINE__ << "] cuModuleGetFunction(frequency_filtering): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    } else {
+        int max_blocks_per_sm;
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->filter_kernel, 128, 0); !success(result)) {
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(frequency_filtering): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        d->filter_num_blocks = num_sms * max_blocks_per_sm;
+    }
+
+    if (auto result = cuModuleGetFunction(&d->im2col_kernel, d->module, "im2col"); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuModuleGetFunction(im2col): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    } else {
+        int max_blocks_per_sm;
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->im2col_kernel, 128, 0); !success(result)) {
+            std::ostringstream message;
+            const char * error_message;
+            showError(cuGetErrorString(result, &error_message));
+            message << '[' << __LINE__ << "] cuOccupancyMaxActiveBlocksPerMultiprocessor(im2col): " << error_message;
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        d->im2col_num_blocks = num_sms * max_blocks_per_sm;
+    }
+
+    if (auto result = cuModuleGetFunction(&d->col2im_kernel, d->module, "col2im"); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuModuleGetFunction(col2im): " << error_message;
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    d->filter_num_blocks = num_sms * max_blocks_per_sm;
 
     if (auto result = cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING); !success(result)) {
         std::ostringstream message;
@@ -802,7 +812,16 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuMemAlloc(&d->d_spatial.data, (2 * d->radius + 1) * calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * square(d->block_size) * sizeof(float)); !success(result)) {
+    if (auto result = cuMemAlloc(&d->d_padded.data, (2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) * calc_pad_size(vi->width, d->block_size, d->block_step) * sizeof(float)); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemAlloc(padded): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    if (auto result = cuMemAlloc(&d->d_spatial.data, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) * sizeof(float)); !success(result)) {
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
