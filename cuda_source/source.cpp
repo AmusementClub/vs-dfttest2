@@ -772,7 +772,18 @@ static void VS_CC DFTTestCreate(
         vsapi->setError(out, message.str().c_str());
         return ;
     }
-    if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&d->filter_num_blocks, d->filter_kernel, 128, 0); !success(result)) {
+
+    int num_sms;
+    if (auto result = cuDeviceGetAttribute(&num_sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, d->device); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuDeviceGetAttribute(multiprocessor_count): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    int max_blocks_per_sm;
+    if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->filter_kernel, 128, 0); !success(result)) {
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
@@ -780,6 +791,7 @@ static void VS_CC DFTTestCreate(
         vsapi->setError(out, message.str().c_str());
         return ;
     }
+    d->filter_num_blocks = num_sms * max_blocks_per_sm;
 
     if (auto result = cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING); !success(result)) {
         std::ostringstream message;
