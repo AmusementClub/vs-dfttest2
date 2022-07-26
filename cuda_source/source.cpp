@@ -353,7 +353,6 @@ struct DFTTestThreadData {
 
 struct DFTTestData {
     VSNodeRef * node;
-    std::unique_ptr<float []> window;
     int radius;
     int block_size;
     int block_step;
@@ -671,18 +670,6 @@ static void VS_CC DFTTestCreate(
 
     node_freer node_freer { vsapi, d->node };
 
-    {
-        if (vsapi->propNumElements(in, "window") != (2 * d->radius + 1) * square(d->block_size)) {
-            vsapi->setError(out, "\"window\" must contain exactly (2*radius+1)*block_size^2 number of elements");
-            return ;
-        }
-        d->window = std::make_unique<float []>((2 * d->radius + 1) * square(d->block_size) * sizeof(float));
-        auto array = vsapi->propGetFloatArray(in, "window", nullptr);
-        for (int i = 0; i < (2 * d->radius + 1) * square(d->block_size); i++) {
-            d->window[i] = static_cast<float>(array[i]);
-        }
-    }
-
     d->block_step = int64ToIntS(vsapi->propGetInt(in, "block_step", 0, &error));
     if (error) {
         d->block_step = d->block_size;
@@ -925,7 +912,6 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "DFTTest",
         "clip:clip;"
         "kernel:data[];"
-        "window:float[];"
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"

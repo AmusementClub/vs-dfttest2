@@ -262,7 +262,6 @@ def DFTTest(
     return core.dfttest2_cuda.DFTTest(
         clip,
         kernel=kernel,
-        window=window,
         block_size=block_size,
         radius=radius,
         block_step=block_step,
