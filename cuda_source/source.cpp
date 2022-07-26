@@ -310,8 +310,7 @@ static void col2im(
 
 static std::variant<CUmodule, std::string> compile(
     const char * user_kernel,
-    CUdevice device,
-    bool zero_mean
+    CUdevice device
 ) {
 
     int major;
@@ -340,9 +339,6 @@ static std::variant<CUmodule, std::string> compile(
     bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
 
     std::ostringstream kernel_source;
-    if (zero_mean) {
-        kernel_source << "#define ZERO_MEAN 1\n";
-    }
     kernel_source << "#define WARPS_PER_BLOCK 4\n";
     kernel_source << user_kernel;
     kernel_source << kernel_implementation;
@@ -714,11 +710,6 @@ static void VS_CC DFTTestCreate(
         d->block_step = d->block_size;
     }
 
-    bool zero_mean = !!vsapi->propGetInt(in, "zero_mean", 0, &error);
-    if (error) {
-        zero_mean = false;
-    }
-
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
     if (error) {
         device_id = 0;
@@ -765,7 +756,7 @@ static void VS_CC DFTTestCreate(
 
     context_pushed = true;
 
-    auto compilation = compile(user_kernel, d->device, zero_mean);
+    auto compilation = compile(user_kernel, d->device);
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -907,7 +898,6 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
-        "zero_mean:int:opt;"
         "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
     );

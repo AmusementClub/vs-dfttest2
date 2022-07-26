@@ -10,8 +10,9 @@ __device__
 extern void filter(float2 & value, int x, int y, int z);
 
 // WARPS_PER_BLOCK
+// ZERO_MEAN
 
-#ifdef ZERO_MEAN
+#if ZERO_MEAN
 // __device__ const float dftgc[];
 #endif // ZERO_MEAN
 
@@ -27,7 +28,7 @@ void frequency_filtering(
     // each warp is responsible for a single block
     // assume that blockDim.x % warpSize == 0
 
-#ifdef ZERO_MEAN
+#if ZERO_MEAN
     __shared__ float storage[WARPS_PER_BLOCK];
 #endif // ZERO_MEAN
 
@@ -36,7 +37,7 @@ void frequency_filtering(
     int block_size_3d = (2 * radius + 1) * block_size_2d;
 
     for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
-#ifdef ZERO_MEAN
+#if ZERO_MEAN
         __syncwarp();
         if (threadIdx.x % warpSize == 0) {
             storage[threadIdx.x / warpSize] = data[i * block_size_3d].x / dftgc[0];
@@ -49,7 +50,7 @@ void frequency_filtering(
         for (int j = threadIdx.x % warpSize; j < block_size_3d; j += warpSize) {
             float2 local_data = data[i * block_size_3d + j];
 
-#ifdef ZERO_MEAN
+#if ZERO_MEAN
             // remove mean
             float val1 = gf * dftgc[j * 2];
             float val2 = gf * dftgc[j * 2 + 1];
@@ -64,7 +65,7 @@ void frequency_filtering(
                 (j % block_size_3d) / block_size_2d
             );
 
-#ifdef ZERO_MEAN
+#if ZERO_MEAN
             // add mean
             local_data.x += val1;
             local_data.y += val2;
