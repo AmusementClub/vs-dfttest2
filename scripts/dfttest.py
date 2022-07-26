@@ -137,7 +137,7 @@ def DFTTest(
     sbsize: int = 16,
     sosize: int = 12,
     tbsize: int = 3,
-    swin: int = 1,
+    swin: int = 0,
     twin: int = 7,
     sbeta: float = 2.5,
     tbeta: float = 2.5,
@@ -198,7 +198,11 @@ def DFTTest(
     kernel = Template(
     """
     #define FILTER_TYPE ${filter_type}
+    #define ZERO_MEAN ${zero_mean}
+
+    #if ZERO_MEAN
     __device__ static const float dftgc[] { ${dftgc} };
+    #endif // ZERO_MEAN
 
     __device__
     static void filter(float2 & value, int x, int y, int z) {
@@ -248,7 +252,8 @@ def DFTTest(
         pmin=pmin,
         pmax=pmax,
         filter_type=filter_type,
-        dftgc=','.join(map(str, dftgc))
+        dftgc=','.join(map(str, dftgc)),
+        zero_mean=zero_mean
     )
 
     return core.dfttest2_cuda.DFTTest(
@@ -258,6 +263,5 @@ def DFTTest(
         block_size=block_size,
         radius=radius,
         block_step=block_step,
-        zero_mean=zero_mean,
         device_id=device_id
     )
