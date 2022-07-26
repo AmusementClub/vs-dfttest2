@@ -117,6 +117,7 @@ void frequency_filtering(
     }
 }
 
+// differs from the cpu counterpart
 extern "C"
 __global__
 void col2im(
