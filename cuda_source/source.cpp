@@ -1095,7 +1095,6 @@ static void VS_CC RDFT(
     context_pushed = true;
 
     Resource<CUstream, cuStreamDestroyCustom> stream {};
-
     if (auto result = cuStreamCreate(&stream.data, CU_STREAM_NON_BLOCKING); !success(result)) {
         std::ostringstream message;
         const char * error_message;
@@ -1173,7 +1172,7 @@ static void VS_CC RDFT(
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
-        message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
+        message << '[' << __LINE__ << "] cuMemcpyDtoHAsync(): " << error_message;
         vsapi->setError(out, message.str().c_str());
         return ;
     }

@@ -79,23 +79,17 @@ void frequency_filtering(
     // each warp is responsible for a single block
     // assume that blockDim.x % WARP_SIZE == 0
 
-#if ZERO_MEAN
-    __shared__ float storage[WARPS_PER_BLOCK];
-#endif // ZERO_MEAN
-
     int block_size_x = block_size_1d / 2 + 1;
     int block_size_2d = block_size_1d * block_size_x;
     int block_size_3d = (2 * radius + 1) * block_size_2d;
 
     for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / WARP_SIZE; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
 #if ZERO_MEAN
-        __syncwarp();
+        float gf;
         if (threadIdx.x % WARP_SIZE == 0) {
-            storage[threadIdx.x / WARP_SIZE] = data[i * block_size_3d].x / window_freq[0];
+            gf = data[i * block_size_3d].x / window_freq[0];
         }
-        __syncwarp();
-        float gf = storage[threadIdx.x / WARP_SIZE];
-        __syncwarp();
+        gf = __shfl_sync(0xFFFFFFFF, gf, 0);
 #endif // ZERO_MEAN
 
         for (int j = threadIdx.x % WARP_SIZE; j < block_size_3d; j += WARP_SIZE) {
