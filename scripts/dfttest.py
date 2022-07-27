@@ -37,7 +37,12 @@ def get_window_value(location: float, size: int, mode: int, beta: float) -> floa
     elif mode == 2: # blackman
         return 0.42 - 0.5 * math.cos(2 * temp) + 0.08 * math.cos(4 * temp)
     elif mode == 3: # 4 term blackman-harris
-        return 0.35875 - 0.48829 * math.cos(2 * temp) + 0.14128 * math.cos(4 * temp) - 0.01168 * math.cos(6 * temp)
+        return (
+            0.35875
+            - 0.48829 * math.cos(2 * temp)
+            + 0.14128 * math.cos(4 * temp)
+            - 0.01168 * math.cos(6 * temp)
+        )
     elif mode == 4: # kaiser-bessel
         def i0(p: float) -> float:
             p /= 2
@@ -55,9 +60,21 @@ def get_window_value(location: float, size: int, mode: int, beta: float) -> floa
         v = 2 * location / size - 1
         return i0(pi * beta * math.sqrt(1 - v * v)) / i0(math.pi * beta)
     elif mode == 5: # 7 term blackman-harris
-        return 0.27105140069342415 - 0.433297939234486060 * math.cos(2 * temp) + 0.218122999543110620 * math.cos(4 * temp) - 0.065925446388030898 * math.cos(6 * temp) + 0.010811742098372268 * math.cos(8 * temp) - 7.7658482522509342e-4 * math.cos(10 * temp) + 1.3887217350903198e-5 * math.cos(12 * temp)
+        return (
+            0.27105140069342415
+            - 0.433297939234486060 * math.cos(2 * temp)
+            + 0.218122999543110620 * math.cos(4 * temp)
+            - 0.065925446388030898 * math.cos(6 * temp)
+            + 0.010811742098372268 * math.cos(8 * temp)
+            - 7.7658482522509342e-4 * math.cos(10 * temp)
+            + 1.3887217350903198e-5 * math.cos(12 * temp)
+        )
     elif mode == 6: # flat top
-        return 0.2810639 - 0.5208972 * math.cos(2 * temp) + 0.1980399 * math.cos(4 * temp)
+        return (
+            0.2810639
+            - 0.5208972 * math.cos(2 * temp)
+            + 0.1980399 * math.cos(4 * temp)
+        )
     elif mode == 7: # rectangular
         return 1.0
     elif mode == 8: # Bartlett
@@ -65,9 +82,19 @@ def get_window_value(location: float, size: int, mode: int, beta: float) -> floa
     elif mode == 9: # bartlett-hann
         return 0.62 - 0.48 * (location / size - 0.5) - 0.38 * math.cos(2 * temp)
     elif mode == 10: # nuttall
-        return 0.355768 - 0.487396 * math.cos(2 * temp) + 0.144232 * math.cos(4 * temp) - 0.012604 * math.cos(6 * temp)
+        return (
+            0.355768
+            - 0.487396 * math.cos(2 * temp)
+            + 0.144232 * math.cos(4 * temp)
+            - 0.012604 * math.cos(6 * temp)
+        )
     elif mode == 11: # blackman-nuttall
-        return 0.3635819 - 0.4891775 * math.cos(2 * temp) + 0.1365995 * math.cos(4 * temp) - 0.0106411 * math.cos(6 * temp)
+        return (
+            0.3635819
+            - 0.4891775 * math.cos(2 * temp)
+            + 0.1365995 * math.cos(4 * temp)
+            - 0.0106411 * math.cos(6 * temp)
+        )
     else:
         raise ValueError("unknown window")
 
@@ -183,9 +210,17 @@ def DFTTest(
     pmax *= wscale
 
     if radius == 0:
-        window_freq = core.dfttest2_cuda.RDFT(data=[w * 255 for w in window], shape=(block_size, block_size))
+        window_freq = core.dfttest2_cuda.RDFT(
+            data=[w * 255 for w in window],
+            shape=(block_size, block_size),
+            device_id=device_id
+        )
     else:
-        window_freq = core.dfttest2_cuda.RDFT(data=[w * 255 for w in window], shape=(2 * radius + 1, block_size, block_size))
+        window_freq = core.dfttest2_cuda.RDFT(
+            data=[w * 255 for w in window],
+            shape=(2 * radius + 1, block_size, block_size),
+            device_id=device_id
+        )
 
     kernel = Template(
     """
