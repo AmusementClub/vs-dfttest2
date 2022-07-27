@@ -127,7 +127,6 @@ void frequency_filtering(
     }
 }
 
-// differs from the cpu counterpart
 extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
@@ -146,6 +145,7 @@ void col2im(
     int horizontal_size = calc_pad_size(width, block_size, block_step);
     int horizontal_num = calc_pad_num(width, block_size, block_step);
     int vertical_size = calc_pad_size(height, block_size, block_step);
+    int vertical_num = calc_pad_num(height, block_size, block_step);
     int pad_x = (horizontal_size - width) / 2;
     int pad_y = (vertical_size - height) / 2;
 
@@ -157,10 +157,10 @@ void col2im(
 
     float sum {};
 
-    int i1 = (y - block_size + block_step) / block_step;
-    int i2 = y / block_step;
-    int j1 = (x - block_size + block_step) / block_step;
-    int j2 = x / block_step;
+    int i1 = (y - block_size + block_step) / block_step; // i1 is implicitly greater than 0
+    int i2 = min(y / block_step, vertical_num - 1);
+    int j1 = (x - block_size + block_step) / block_step; // j1 is implicitly greater than 0
+    int j2 = min(x / block_step, horizontal_num - 1);
 
     for (int i = i1; i <= i2; i++) {
         int offset_y = y - i * block_step;
