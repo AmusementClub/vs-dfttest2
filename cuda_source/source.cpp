@@ -376,8 +376,11 @@ struct DFTTestData {
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency; // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size/2+1)
     std::mutex lock; // TODO: replace by `num_streams`
 
-    Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle; // 2-D or 3-D, depends on radius
+    // 2-D or 3-D, depends on radius
+    Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle;
     Resource<cufftHandle, cufftDestroyCustom, true> irfft_handle;
+    Resource<cufftHandle, cufftDestroyCustom, true> subsampled_rfft_handle;
+    Resource<cufftHandle, cufftDestroyCustom, true> subsampled_irfft_handle;
 
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction filter_kernel;
@@ -493,6 +496,10 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             int height = vsapi->getFrameHeight(src_center_frame.get(), plane);
             int stride = vsapi->getStride(src_center_frame.get(), plane) / sizeof(float);
 
+            bool subsampled = vi->format->subSamplingW != 0 || vi->format->subSamplingW != 0;
+            auto & rfft_handle = (plane == 0 || !subsampled) ? d->rfft_handle : d->subsampled_rfft_handle;
+            auto & irfft_handle = (plane == 0 || !subsampled) ? d->irfft_handle : d->subsampled_irfft_handle;
+
             auto padded_size_spatial = (
                 calc_pad_size(height, d->block_size, d->block_step) *
                 calc_pad_size(width, d->block_size, d->block_step)
@@ -530,7 +537,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         return nullptr;
                     }
                 }
-                if (auto result = cufftExecR2C(d->rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial.data), reinterpret_cast<cufftComplex *>(d->d_frequency.data)); !success(result)) {
+                if (auto result = cufftExecR2C(rfft_handle, reinterpret_cast<cufftReal *>(d->d_spatial.data), reinterpret_cast<cufftComplex *>(d->d_frequency.data)); !success(result)) {
                     std::ostringstream message;
                     message << '[' << __LINE__ << "] cufft(rfft): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
@@ -548,7 +555,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         return nullptr;
                     }
                 }
-                if (auto result = cufftExecC2R(d->irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency.data), reinterpret_cast<cufftReal *>(d->d_spatial.data)); !success(result)) {
+                if (auto result = cufftExecC2R(irfft_handle, reinterpret_cast<cufftComplex *>(d->d_frequency.data), reinterpret_cast<cufftReal *>(d->d_spatial.data)); !success(result)) {
                     std::ostringstream message;
                     message << '[' << __LINE__ << "] cufft(irfft): " << cufftGetErrorString(result);
                     vsapi->setFilterError(message.str().c_str(), frameCtx);
@@ -578,7 +585,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                         .srcHeight = static_cast<size_t>(calc_pad_size(height, d->block_size, d->block_step)),
                         .dstXInBytes = (calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * sizeof(float),
                         .dstY = static_cast<size_t>((calc_pad_size(height, d->block_size, d->block_step) - height) / 2),
-                        .dstZ = 0, // vs_bitblt(dstp) copied from the 0-th slice
+                        .dstZ = 0, // vs_bitblt(dstp) copies from the 0-th slice
                         .dstMemoryType = CU_MEMORYTYPE_HOST,
                         .dstHost = thread_data.h_padded,
                         .dstPitch = calc_pad_size(width, d->block_size, d->block_step) * sizeof(float),
@@ -847,6 +854,7 @@ static void VS_CC DFTTestCreate(
     }
 
     int batch = calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step);
+
     if (auto result = cufftCreate(&d->rfft_handle.data); !success(result)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] cufftCreate(rfft): " << cufftGetErrorString(result);
@@ -907,6 +915,72 @@ static void VS_CC DFTTestCreate(
         message << '[' << __LINE__ << "] cufftSetStream(irfft): " << cufftGetErrorString(result);
         vsapi->setError(out, message.str().c_str());
         return ;
+    }
+
+    if (vi->format->subSamplingW != 0 || vi->format->subSamplingH != 0) {
+        int subsampled_batch = calc_pad_num(vi->height >> vi->format->subSamplingH, d->block_size, d->block_step) * calc_pad_num(vi->width >> vi->format->subSamplingW, d->block_size, d->block_step);
+
+        if (auto result = cufftCreate(&d->subsampled_rfft_handle.data); !success(result)) {
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftCreate(subsampled_rfft): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        if (d->radius == 0) {
+            std::array<int, 2> n { d->block_size, d->block_size };
+            if (auto result = cufftPlanMany(&d->subsampled_rfft_handle.data, 2, n.data(), nullptr, 1, square(d->block_size), nullptr, 1, d->block_size * (d->block_size / 2 + 1), CUFFT_R2C, subsampled_batch); !success(result)) {
+                std::ostringstream message;
+                message << '[' << __LINE__ << "] cufftPlanMany(subsampled_rfft2): " << cufftGetErrorString(result);
+                vsapi->setError(out, message.str().c_str());
+                return ;
+            }
+        } else { // radius != 0
+            std::array<int, 3> n { 2 * d->radius + 1, d->block_size, d->block_size };
+            if (auto result = cufftPlanMany(&d->subsampled_rfft_handle.data, 3, n.data(), nullptr, 1, (2 * d->radius + 1) * square(d->block_size), nullptr, 1, (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1), CUFFT_R2C, subsampled_batch); !success(result)) {
+                std::ostringstream message;
+                message << '[' << __LINE__ << "] cufftPlanMany(subsampled_rfft3): " << cufftGetErrorString(result);
+                vsapi->setError(out, message.str().c_str());
+                return ;
+            }
+        }
+        if (auto result = cufftSetStream(d->subsampled_rfft_handle, d->stream); !success(result)) {
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftSetStream(subsampled_rfft): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+
+        if (auto result = cufftCreate(&d->subsampled_irfft_handle.data); !success(result)) {
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftCreate(subsampled_irfft): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
+        if (d->radius == 0) {
+            std::array<int, 2> n { d->block_size, d->block_size };
+            auto result = cufftPlanMany(&d->subsampled_irfft_handle.data, 2, n.data(), nullptr, 1, d->block_size * (d->block_size / 2 + 1), nullptr, 1, square(d->block_size), CUFFT_C2R, subsampled_batch);
+            if (!success(result)) {
+                std::ostringstream message;
+                message << '[' << __LINE__ << "] cufftPlanMany(subsampled_irfft2): " << cufftGetErrorString(result);
+                vsapi->setError(out, message.str().c_str());
+                return ;
+            }
+        } else { // radius != 0
+            std::array<int, 3> n { 2 * d->radius + 1, d->block_size, d->block_size };
+            auto result = cufftPlanMany(&d->subsampled_irfft_handle.data, 3, n.data(), nullptr, 1, (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1), nullptr, 1, (2 * d->radius + 1) * square(d->block_size), CUFFT_C2R, subsampled_batch);
+            if (!success(result)) {
+                std::ostringstream message;
+                message << '[' << __LINE__ << "] cufftPlanMany(subsampled_irfft3): " << cufftGetErrorString(result);
+                vsapi->setError(out, message.str().c_str());
+                return ;
+            }
+        }
+        if (auto result = cufftSetStream(d->subsampled_irfft_handle, d->stream); !success(result)) {
+            std::ostringstream message;
+            message << '[' << __LINE__ << "] cufftSetStream(subsampled_irfft): " << cufftGetErrorString(result);
+            vsapi->setError(out, message.str().c_str());
+            return ;
+        }
     }
 
     VSCoreInfo info;

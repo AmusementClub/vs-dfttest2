@@ -148,11 +148,9 @@ def DFTTest(
 
     if any((
         clip.format.sample_type != vs.FLOAT,
-        clip.format.bits_per_sample != 32,
-        clip.format.subsampling_w != 0,
-        clip.format.subsampling_h != 0
+        clip.format.bits_per_sample != 32
     )):
-        raise TypeError('"clip" must be of 32-bit float format with no subsampling')
+        raise TypeError('"clip" must be of 32-bit float format')
 
     # translate parameters
     if ftype == 0:
