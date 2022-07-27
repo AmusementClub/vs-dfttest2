@@ -17,7 +17,7 @@ extern void filter(float2 & value, int x, int y, int z);
 // WARP_SIZE
 
 #if ZERO_MEAN
-// __device__ const float dftgc[];
+// __device__ const float window_freq[]; // frequency response of the window
 #endif // ZERO_MEAN
 
 __device__
@@ -91,7 +91,7 @@ void frequency_filtering(
 #if ZERO_MEAN
         __syncwarp();
         if (threadIdx.x % WARP_SIZE == 0) {
-            storage[threadIdx.x / WARP_SIZE] = data[i * block_size_3d].x / dftgc[0];
+            storage[threadIdx.x / WARP_SIZE] = data[i * block_size_3d].x / window_freq[0];
         }
         __syncwarp();
         float gf = storage[threadIdx.x / WARP_SIZE];
@@ -103,8 +103,8 @@ void frequency_filtering(
 
 #if ZERO_MEAN
             // remove mean
-            float val1 = gf * dftgc[j * 2];
-            float val2 = gf * dftgc[j * 2 + 1];
+            float val1 = gf * window_freq[j * 2];
+            float val2 = gf * window_freq[j * 2 + 1];
             local_data.x -= val1;
             local_data.y -= val2;
 #endif // ZERO_MEAN

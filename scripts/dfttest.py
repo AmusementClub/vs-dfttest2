@@ -118,15 +118,6 @@ def get_window(
     return window
 
 
-def get_dftgc(window: typing.Sequence[float], radius: int, block_size: int) -> typing.List[float]:
-    import numpy as np
-    import numpy.fft as fft
-    if radius == 0:
-        return fft.rfft2(255 * np.array(window, dtype=np.float64).reshape(block_size, block_size)).flatten().view(np.float64).tolist()
-    else:
-        return fft.rfftn(255 * np.array(window, dtype=np.float64).reshape(2 * radius + 1, block_size, block_size)).flatten().view(np.float64).tolist()
-
-
 def DFTTest(
     clip: vs.VideoNode,
     ftype: int = 0,
@@ -191,7 +182,10 @@ def DFTTest(
     pmin *= wscale
     pmax *= wscale
 
-    dftgc = get_dftgc(window=window, radius=radius, block_size=block_size)
+    if radius == 0:
+        window_freq = core.dfttest2_cuda.RDFT(data=[w * 255 for w in window], shape=(block_size, block_size))
+    else:
+        window_freq = core.dfttest2_cuda.RDFT(data=[w * 255 for w in window], shape=(2 * radius + 1, block_size, block_size))
 
     kernel = Template(
     """
@@ -199,7 +193,7 @@ def DFTTest(
     #define ZERO_MEAN ${zero_mean}
 
     #if ZERO_MEAN
-    __device__ static const float dftgc[] { ${dftgc} };
+    __device__ static const float window_freq[] { ${window_freq} };
     #endif // ZERO_MEAN
 
     __device__ static const float window[] { ${window} };
@@ -252,7 +246,7 @@ def DFTTest(
         pmin=float(pmin),
         pmax=float(pmax),
         filter_type=int(filter_type),
-        dftgc=','.join(str(float(x)) for x in dftgc),
+        window_freq=','.join(str(float(x)) for x in window_freq),
         zero_mean=int(zero_mean),
         window=','.join(str(float(x)) for x in window),
     )

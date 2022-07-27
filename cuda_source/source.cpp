@@ -716,15 +716,6 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuDeviceGetAttribute(&d->warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, d->device); !success(result)) {
-        std::ostringstream message;
-        const char * error_message;
-        showError(cuGetErrorString(result, &error_message));
-        message << '[' << __LINE__ << "] cuDeviceGetAttribute(warp_size): " << error_message;
-        vsapi->setError(out, message.str().c_str());
-        return ;
-    }
-
     if (auto result = cuDevicePrimaryCtxRetain(&d->context, d->device); !success(result)) {
         std::ostringstream message;
         const char * error_message;
@@ -747,6 +738,15 @@ static void VS_CC DFTTestCreate(
     }
 
     context_pushed = true;
+
+    if (auto result = cuDeviceGetAttribute(&d->warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, d->device); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuDeviceGetAttribute(warp_size): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
 
     auto compilation = compile(user_kernel, d->device, d->radius, d->block_size, d->block_step, d->warp_size, d->warps_per_block);
     if (std::holds_alternative<std::string>(compilation)) {
@@ -998,6 +998,197 @@ static void VS_CC DFTTestCreate(
     context_releaser.release();
 }
 
+static void VS_CC RDFT(
+    const VSMap *in, VSMap *out, void *userData,
+    VSCore *core, const VSAPI *vsapi
+) noexcept {
+
+    bool context_retained = false;
+    bool context_pushed = false;
+
+    context_releaser context_releaser { &context_retained };
+
+    // release before pop context
+    context_popper context_popper { &context_pushed };
+
+    auto set_error = [vsapi, out](const char * error_message) -> void {
+        vsapi->setError(out, error_message);
+    };
+
+    int ndim = vsapi->propNumElements(in, "shape");
+    if (ndim != 1 && ndim != 2 && ndim != 3) {
+        return set_error("\"shape\" must be an array of ints with 1, 2 or 3 values");
+    }
+
+    std::array<int, 3> shape;
+    {
+        auto shape_array = vsapi->propGetIntArray(in, "shape", nullptr);
+        for (int i = 0; i < ndim; i++) {
+            shape[i] = int64ToIntS(shape_array[i]);
+        }
+    }
+
+    int size = 1;
+    for (int i = 0; i < ndim; i++) {
+        size *= shape[i];
+    }
+    int complex_size = shape[ndim - 1] / 2 + 1;
+    for (int i = 0; i < ndim - 1; i++) {
+        complex_size *= shape[i];
+    }
+
+    if (vsapi->propNumElements(in, "data") != size) {
+        return set_error("cannot reshape array");
+    }
+
+    auto data = vsapi->propGetFloatArray(in, "data", nullptr);
+
+    int error;
+    int device_id = static_cast<int>(vsapi->propGetInt(in, "device_id", 0, &error));
+    if (error) {
+        device_id = 0;
+    }
+
+    if (auto result = cuInit(0); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuInit(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    CUdevice device;
+
+    if (auto result = cuDeviceGet(&device, device_id); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuDeviceGet(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    CUcontext context;
+
+    if (auto result = cuDevicePrimaryCtxRetain(&context, device); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuDevicePrimaryCtxRetain(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    context_retained = true;
+    context_releaser.device = device;
+
+    if (auto result = cuCtxPushCurrent(context); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuCtxPushCurrent(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    context_pushed = true;
+
+    Resource<CUstream, cuStreamDestroyCustom> stream {};
+
+    if (auto result = cuStreamCreate(&stream.data, CU_STREAM_NON_BLOCKING); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuStreamCreate(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial {};
+    if (auto result = cuMemAlloc(&d_spatial.data, size * sizeof(cufftDoubleReal)); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemAlloc(spatial): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency {};
+    if (auto result = cuMemAlloc(&d_frequency.data, complex_size * sizeof(cufftDoubleComplex)); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemAlloc(frequency): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    Resource<double *, cuMemFreeHostCustom> h_frequency {};
+    if (auto result = cuMemHostAlloc(reinterpret_cast<void **>(&h_frequency.data), complex_size * sizeof(cufftDoubleComplex), 0); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemHostAlloc(frequency): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle;
+    if (auto result = cufftCreate(&rfft_handle.data); !success(result)) {
+        std::ostringstream message;
+        message << '[' << __LINE__ << "] cufftCreate(rfft): " << cufftGetErrorString(result);
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (auto result = cufftPlanMany(&rfft_handle.data, ndim, shape.data(), nullptr, 1, 0, nullptr, 1, 0, CUFFT_D2Z, 1); !success(result)) {
+        std::ostringstream message;
+        message << '[' << __LINE__ << "] cufftPlanMany(rfft): " << cufftGetErrorString(result);
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (auto result = cufftSetStream(rfft_handle, stream); !success(result)) {
+        std::ostringstream message;
+        message << '[' << __LINE__ << "] cufftSetStream(rfft): " << cufftGetErrorString(result);
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    if (auto result = cuMemcpyHtoDAsync(d_spatial, data, size * sizeof(cufftDoubleReal), stream); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (auto result = cufftExecD2Z(rfft_handle, reinterpret_cast<cufftDoubleReal *>(d_spatial.data), reinterpret_cast<cufftDoubleComplex *>(d_frequency.data)); !success(result)) {
+        std::ostringstream message;
+        message << '[' << __LINE__ << "] cufft(rfft): " << cufftGetErrorString(result);
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (auto result = cuMemcpyDtoHAsync(h_frequency, d_frequency, complex_size * sizeof(cufftDoubleComplex), stream); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuMemcpyHtoDAsync(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+    if (auto result = cuStreamSynchronize(stream); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuStreamSynchronize(): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
+    vsapi->propSetFloatArray(out, "ret", h_frequency, complex_size * 2);
+}
+
 VS_EXTERNAL_API(void)
 VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
     configFunc("io.github.amusementclub.dfttest2_cuda", "dfttest2_cuda", "DFTTest2 (CUDA)", VAPOURSYNTH_API_VERSION, 1, plugin);
@@ -1011,5 +1202,13 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "block_step:int:opt;"
         "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
+    );
+
+    registerFunc(
+        "RDFT",
+        "data:float[];"
+        "shape:int[];"
+        "device_id:int:opt;",
+        RDFT, nullptr, plugin
     );
 }
