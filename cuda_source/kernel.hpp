@@ -9,8 +9,12 @@ static const auto kernel_implementation = R"""(
 __device__
 extern void filter(float2 & value, int x, int y, int z);
 
-// WARPS_PER_BLOCK
 // ZERO_MEAN
+// RADIUS
+// BLOCK_SIZE
+// BLOCK_STEP
+// WARPS_PER_BLOCK
+// WARP_SIZE
 
 #if ZERO_MEAN
 // __device__ const float dftgc[];
@@ -27,14 +31,18 @@ static int calc_pad_num(int size, int block_size, int block_step) {
 }
 
 extern "C"
+__launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void im2col(
     float * __restrict__ dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     const float * __restrict__ srcp, // shape: (2*radius+1, vertical_size, horizontal_size)
-    int width, int height,
-    int radius,
-    int block_size, int block_step
+    int width,
+    int height
 ) {
+
+    int radius = static_cast<int>(RADIUS);
+    int block_size = static_cast<int>(BLOCK_SIZE);
+    int block_step = static_cast<int>(BLOCK_STEP);
 
     int horizontal_num = calc_pad_num(width, block_size, block_step);
     int vertical_num = calc_pad_num(height, block_size, block_step);
@@ -42,13 +50,13 @@ void im2col(
     int vertical_size = calc_pad_size(height, block_size, block_step);
     int num_blocks = vertical_num * horizontal_num;
 
-    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
+    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / WARP_SIZE; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
         int ix = i % horizontal_num;
         int iy = i / horizontal_num;
         auto dst = &dstp[i * (2 * radius + 1) * block_size * block_size];
         for (int j = 0; j < 2 * radius + 1; j++) {
             auto src = &srcp[(j * vertical_size + iy * block_step) * horizontal_size + ix * block_step];
-            for (int k = threadIdx.x % warpSize; k < block_size * block_size; k += warpSize) {
+            for (int k = threadIdx.x % WARP_SIZE; k < block_size * block_size; k += WARP_SIZE) {
                 int kx = k % block_size;
                 int ky = k / block_size;
                 dst[j * block_size * block_size + k] = src[ky * horizontal_size + kx] * window[j * block_size * block_size + k];
@@ -58,16 +66,18 @@ void im2col(
 }
 
 extern "C"
+__launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void frequency_filtering(
     float2 * data,
-    int num_blocks,
-    int radius,
-    int block_size_1d
+    int num_blocks
 ) {
 
+    int radius = static_cast<int>(RADIUS);
+    int block_size_1d = static_cast<int>(BLOCK_SIZE);
+
     // each warp is responsible for a single block
-    // assume that blockDim.x % warpSize == 0
+    // assume that blockDim.x % WARP_SIZE == 0
 
 #if ZERO_MEAN
     __shared__ float storage[WARPS_PER_BLOCK];
@@ -77,18 +87,18 @@ void frequency_filtering(
     int block_size_2d = block_size_1d * block_size_x;
     int block_size_3d = (2 * radius + 1) * block_size_2d;
 
-    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / warpSize; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
+    for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / WARP_SIZE; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
 #if ZERO_MEAN
         __syncwarp();
-        if (threadIdx.x % warpSize == 0) {
-            storage[threadIdx.x / warpSize] = data[i * block_size_3d].x / dftgc[0];
+        if (threadIdx.x % WARP_SIZE == 0) {
+            storage[threadIdx.x / WARP_SIZE] = data[i * block_size_3d].x / dftgc[0];
         }
         __syncwarp();
-        float gf = storage[threadIdx.x / warpSize];
+        float gf = storage[threadIdx.x / WARP_SIZE];
         __syncwarp();
 #endif // ZERO_MEAN
 
-        for (int j = threadIdx.x % warpSize; j < block_size_3d; j += warpSize) {
+        for (int j = threadIdx.x % WARP_SIZE; j < block_size_3d; j += WARP_SIZE) {
             float2 local_data = data[i * block_size_3d + j];
 
 #if ZERO_MEAN
@@ -119,14 +129,18 @@ void frequency_filtering(
 
 // differs from the cpu counterpart
 extern "C"
+__launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void col2im(
     float * __restrict__ dst, // shape: (2*radius+1, vertical_size, horizontal_size)
     const float * __restrict__ src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    int width, int height,
-    int radius,
-    int block_size, int block_step
+    int width,
+    int height
 ) {
+
+    int radius = static_cast<int>(RADIUS);
+    int block_size = static_cast<int>(BLOCK_SIZE);
+    int block_step = static_cast<int>(BLOCK_STEP);
 
     // each thread is responsible for a single pixel
     int horizontal_size = calc_pad_size(width, block_size, block_step);

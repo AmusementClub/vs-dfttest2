@@ -256,7 +256,12 @@ static void reflection_padding(
 
 static std::variant<CUmodule, std::string> compile(
     const char * user_kernel,
-    CUdevice device
+    CUdevice device,
+    int radius,
+    int block_size,
+    int block_step,
+    int warp_size,
+    int warps_per_block
 ) {
 
     int major;
@@ -285,7 +290,11 @@ static std::variant<CUmodule, std::string> compile(
     bool generate_cubin = compute_capability <= supported_archs[num_archs - 1];
 
     std::ostringstream kernel_source;
-    kernel_source << "#define WARPS_PER_BLOCK 4\n";
+    kernel_source << "#define RADIUS " << radius << '\n';
+    kernel_source << "#define BLOCK_SIZE " << block_size << '\n';
+    kernel_source << "#define BLOCK_STEP " << block_step << '\n';
+    kernel_source << "#define WARP_SIZE " << warp_size << '\n';
+    kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
     kernel_source << user_kernel;
     kernel_source << kernel_implementation;
 
@@ -357,6 +366,8 @@ struct DFTTestData {
     int block_size;
     int block_step;
     CUdevice device; // device_id
+    int warp_size;
+    int warps_per_block = 4; // most existing devices contain four schedulers per sm
 
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
@@ -509,8 +520,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     return nullptr;
                 }
                 {
-                    void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height, &d->radius, &d->block_size, &d->block_step };
-                    if (auto result = cuLaunchKernel(d->im2col_kernel, static_cast<unsigned int>(d->im2col_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                    void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height };
+                    if (auto result = cuLaunchKernel(d->im2col_kernel, static_cast<unsigned int>(d->im2col_num_blocks), 1, 1, d->warps_per_block * d->warp_size, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         std::ostringstream message;
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
@@ -527,8 +538,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
                 {
                     int num_blocks = calc_pad_num(height, d->block_size, d->block_step) * calc_pad_num(width, d->block_size, d->block_step);
-                    void * params[] { &d->d_frequency.data, &num_blocks, &d->radius, &d->block_size };
-                    if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, 128, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
+                    void * params[] { &d->d_frequency.data, &num_blocks };
+                    if (auto result = cuLaunchKernel(d->filter_kernel, static_cast<unsigned int>(d->filter_num_blocks), 1, 1, d->warps_per_block * d->warp_size, 1, 1, 0, d->stream, params, nullptr); !success(result)) {
                         std::ostringstream message;
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
@@ -544,10 +555,10 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     return nullptr;
                 }
                 {
-                    void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height, &d->radius, &d->block_size, &d->block_step };
+                    void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height };
                     unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                     unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
-                    if (auto result = cuLaunchKernel(d->col2im_kernel, (horizontal_size + 31) / 32, (vertical_size + 3) / 4, 1, 32, 4, 1, 0, d->stream, params, nullptr); !success(result)) {
+                    if (auto result = cuLaunchKernel(d->col2im_kernel, (horizontal_size + d->warp_size - 1) / d->warp_size, (vertical_size + d->warps_per_block - 1) / d->warps_per_block, 1, d->warp_size, d->warps_per_block, 1, 0, d->stream, params, nullptr); !success(result)) {
                         std::ostringstream message;
                         const char * error_message;
                         showError(cuGetErrorString(result, &error_message));
@@ -698,6 +709,15 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
+    if (auto result = cuDeviceGetAttribute(&d->warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE, d->device); !success(result)) {
+        std::ostringstream message;
+        const char * error_message;
+        showError(cuGetErrorString(result, &error_message));
+        message << '[' << __LINE__ << "] cuDeviceGetAttribute(warp_size): " << error_message;
+        vsapi->setError(out, message.str().c_str());
+        return ;
+    }
+
     if (auto result = cuDevicePrimaryCtxRetain(&d->context, d->device); !success(result)) {
         std::ostringstream message;
         const char * error_message;
@@ -721,7 +741,7 @@ static void VS_CC DFTTestCreate(
 
     context_pushed = true;
 
-    auto compilation = compile(user_kernel, d->device);
+    auto compilation = compile(user_kernel, d->device, d->radius, d->block_size, d->block_step, d->warp_size, d->warps_per_block);
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -750,7 +770,7 @@ static void VS_CC DFTTestCreate(
         return ;
     } else {
         int max_blocks_per_sm;
-        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->filter_kernel, 128, 0); !success(result)) {
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->filter_kernel, d->warps_per_block * d->warp_size, 0); !success(result)) {
             std::ostringstream message;
             const char * error_message;
             showError(cuGetErrorString(result, &error_message));
@@ -770,7 +790,7 @@ static void VS_CC DFTTestCreate(
         return ;
     } else {
         int max_blocks_per_sm;
-        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->im2col_kernel, 128, 0); !success(result)) {
+        if (auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, d->im2col_kernel, d->warps_per_block * d->warp_size, 0); !success(result)) {
             std::ostringstream message;
             const char * error_message;
             showError(cuGetErrorString(result, &error_message));
