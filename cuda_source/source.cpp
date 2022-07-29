@@ -211,9 +211,10 @@ static int calc_pad_num(int size, int block_size, int block_step) {
     return (calc_pad_size(size, block_size, block_step) - block_size) / block_step + 1;
 }
 
-static void reflection_padding(
-    float * VS_RESTRICT dst, // shape: (pad_height, pad_width)
-    const float * VS_RESTRICT src, // shape: (height, stride)
+template <typename T>
+static void reflection_padding_impl(
+    T * VS_RESTRICT dst, // shape: (pad_height, pad_width)
+    const T * VS_RESTRICT src, // shape: (height, stride)
     int width, int height, int stride,
     int block_size, int block_step
 ) {
@@ -225,9 +226,9 @@ static void reflection_padding(
     int offset_x = (pad_width - width) / 2;
 
     vs_bitblt(
-        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(float),
-        src, stride * sizeof(float),
-        width * sizeof(float), height
+        &dst[offset_y * pad_width + offset_x], pad_width * sizeof(T),
+        src, stride * sizeof(T),
+        width * sizeof(T), height
     );
 
     // copy left and right regions
@@ -245,12 +246,44 @@ static void reflection_padding(
 
     // copy top region
     for (int y = 0; y < offset_y; y++) {
-        std::memcpy(&dst[y * pad_width], &dst[(offset_y * 2 - y) * pad_width], pad_width * sizeof(float));
+        std::memcpy(&dst[y * pad_width], &dst[(offset_y * 2 - y) * pad_width], pad_width * sizeof(T));
     }
 
     // copy bottom region
     for (int y = offset_y + height; y < pad_height; y++) {
-        std::memcpy(&dst[y * pad_width], &dst[(2 * (offset_y + height) - 2 - y) * pad_width], pad_width * sizeof(float));
+        std::memcpy(&dst[y * pad_width], &dst[(2 * (offset_y + height) - 2 - y) * pad_width], pad_width * sizeof(T));
+    }
+}
+
+static void reflection_padding(
+    uint8_t * VS_RESTRICT dst, // shape: (pad_height, pad_width)
+    const uint8_t * VS_RESTRICT src, // shape: (height, stride)
+    int width, int height, int stride,
+    int block_size, int block_step,
+    int bytes_per_sample
+) {
+
+    if (bytes_per_sample == 1) {
+        reflection_padding_impl(
+            static_cast<uint8_t *>(dst),
+            static_cast<const uint8_t *>(src), 
+            width, height, stride,
+            block_size, block_step
+        );
+    } else if (bytes_per_sample == 2) {
+        reflection_padding_impl(
+            reinterpret_cast<uint16_t *>(dst),
+            reinterpret_cast<const uint16_t *>(src), 
+            width, height, stride,
+            block_size, block_step
+        );
+    } else if (bytes_per_sample == 4) {
+        reflection_padding_impl(
+            reinterpret_cast<uint32_t *>(dst),
+            reinterpret_cast<const uint32_t *>(src), 
+            width, height, stride,
+            block_size, block_step
+        );
     }
 }
 
@@ -261,7 +294,9 @@ static std::variant<CUmodule, std::string> compile(
     int block_size,
     int block_step,
     int warp_size,
-    int warps_per_block
+    int warps_per_block,
+    int sample_type,
+    int bits_per_sample
 ) {
 
     int major;
@@ -295,7 +330,26 @@ static std::variant<CUmodule, std::string> compile(
     kernel_source << "#define BLOCK_STEP " << block_step << '\n';
     kernel_source << "#define WARP_SIZE " << warp_size << '\n';
     kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
-    kernel_source << user_kernel;
+    if (sample_type == stInteger) {
+        int bytes_per_sample = bits_per_sample / 8;
+        const char * type;
+        if (bytes_per_sample == 1) {
+            type = "unsigned char";
+        } else if (bytes_per_sample == 2) {
+            type = "unsigned short";
+        } else if (bytes_per_sample == 4) {
+            type = "unsigned int";
+        }
+        kernel_source << "#define TYPE " << type << '\n';
+        kernel_source << "#define SCALE " << 1.0 / (1 << (bits_per_sample - 8)) << '\n';        
+        kernel_source << "#define PEAK " << ((1 << bits_per_sample) - 1) << '\n';
+    } else if (sample_type == stFloat) {
+        if (bits_per_sample == 32) {
+            kernel_source << "#define TYPE float\n";
+        }
+        kernel_source << "#define SCALE 255.0\n";
+    }
+    kernel_source << user_kernel << '\n';
     kernel_source << kernel_implementation;
 
     nvrtcProgram program;
@@ -356,7 +410,7 @@ static std::variant<CUmodule, std::string> compile(
 
 
 struct DFTTestThreadData {
-    float * h_padded; // shape: (pad_height, pad_width)
+    uint8_t * h_padded; // shape: (pad_height, pad_width)
 };
 
 
@@ -455,7 +509,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     (2 * d->radius + 1) *
                     calc_pad_size(vi->height, d->block_size, d->block_step) *
                     calc_pad_size(vi->width, d->block_size, d->block_step) *
-                    sizeof(float)
+                    vi->format->bytesPerSample
                 );
 
                 if (auto result = cuMemHostAlloc(reinterpret_cast<void **>(&thread_data.h_padded), padded_size, 0); result != CUDA_SUCCESS) {
@@ -494,7 +548,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         for (int plane = 0; plane < format->numPlanes; plane++) {
             int width = vsapi->getFrameWidth(src_center_frame.get(), plane);
             int height = vsapi->getFrameHeight(src_center_frame.get(), plane);
-            int stride = vsapi->getStride(src_center_frame.get(), plane) / sizeof(float);
+            int stride = vsapi->getStride(src_center_frame.get(), plane) / vi->format->bytesPerSample;
 
             bool subsampled = vi->format->subSamplingW != 0 || vi->format->subSamplingW != 0;
             auto & rfft_handle = (plane == 0 || !subsampled) ? d->rfft_handle : d->subsampled_rfft_handle;
@@ -508,17 +562,18 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             for (int i = 0; i < 2 * d->radius + 1; i++) {
                 auto srcp = vsapi->getReadPtr(src_frames[i].get(), plane);
                 reflection_padding(
-                    &thread_data.h_padded[i * padded_size_spatial],
-                    reinterpret_cast<const float *>(srcp),
+                    &thread_data.h_padded[(i * padded_size_spatial) * vi->format->bytesPerSample],
+                    srcp,
                     width, height, stride,
-                    d->block_size, d->block_step
+                    d->block_size, d->block_step,
+                    vi->format->bytesPerSample
                 );
             }
 
             {
                 std::lock_guard lock { d->lock };
 
-                if (auto result = cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, (2 * d->radius + 1) * padded_size_spatial * sizeof(float), d->stream); !success(result)) {
+                if (auto result = cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, (2 * d->radius + 1) * padded_size_spatial * vi->format->bytesPerSample, d->stream); !success(result)) {
                     std::ostringstream message;
                     const char * error_message;
                     showError(cuGetErrorString(result, &error_message));
@@ -576,21 +631,21 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 }
                 {
                     const CUDA_MEMCPY3D config {
-                        .srcXInBytes = (calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * sizeof(float),
+                        .srcXInBytes = static_cast<size_t>((calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * vi->format->bytesPerSample),
                         .srcY = static_cast<size_t>((calc_pad_size(height, d->block_size, d->block_step) - height) / 2),
                         .srcZ = static_cast<size_t>(d->radius),
                         .srcMemoryType = CU_MEMORYTYPE_DEVICE,
                         .srcDevice = d->d_padded.data,
-                        .srcPitch = calc_pad_size(width, d->block_size, d->block_step) * sizeof(float),
+                        .srcPitch = static_cast<size_t>(calc_pad_size(width, d->block_size, d->block_step) * vi->format->bytesPerSample),
                         .srcHeight = static_cast<size_t>(calc_pad_size(height, d->block_size, d->block_step)),
-                        .dstXInBytes = (calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * sizeof(float),
+                        .dstXInBytes = static_cast<size_t>((calc_pad_size(width, d->block_size, d->block_step) - width) / 2 * vi->format->bytesPerSample),
                         .dstY = static_cast<size_t>((calc_pad_size(height, d->block_size, d->block_step) - height) / 2),
                         .dstZ = 0, // vs_bitblt(dstp) copies from the 0-th slice
                         .dstMemoryType = CU_MEMORYTYPE_HOST,
                         .dstHost = thread_data.h_padded,
-                        .dstPitch = calc_pad_size(width, d->block_size, d->block_step) * sizeof(float),
+                        .dstPitch = static_cast<size_t>(calc_pad_size(width, d->block_size, d->block_step) * vi->format->bytesPerSample),
                         .dstHeight = static_cast<size_t>(calc_pad_size(height, d->block_size, d->block_step)),
-                        .WidthInBytes = width * sizeof(float),
+                        .WidthInBytes = static_cast<size_t>(width * vi->format->bytesPerSample),
                         .Height = static_cast<size_t>(height),
                         .Depth = 1
                     };
@@ -621,9 +676,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
             auto dstp = vsapi->getWritePtr(dst_frame.get(), plane);
             vs_bitblt(
-                dstp, stride * sizeof(float),
-                &thread_data.h_padded[offset_y * pad_width + offset_x], pad_width * sizeof(float),
-                width * sizeof(float), height
+                dstp, stride * vi->format->bytesPerSample,
+                &thread_data.h_padded[(offset_y * pad_width + offset_x) * vi->format->bytesPerSample], pad_width * vi->format->bytesPerSample,
+                width * vi->format->bytesPerSample, height
             );
         }
 
@@ -748,7 +803,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    auto compilation = compile(user_kernel, d->device, d->radius, d->block_size, d->block_step, d->warp_size, d->warps_per_block);
+    auto compilation = compile(user_kernel, d->device, d->radius, d->block_size, d->block_step, d->warp_size, d->warps_per_block, vi->format->sampleType, vi->format->bitsPerSample);
     if (std::holds_alternative<std::string>(compilation)) {
         std::ostringstream message;
         message << '[' << __LINE__ << "] compile(): " << std::get<std::string>(compilation);
@@ -826,7 +881,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuMemAlloc(&d->d_padded.data, (2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) * calc_pad_size(vi->width, d->block_size, d->block_step) * sizeof(float)); !success(result)) {
+    if (auto result = cuMemAlloc(&d->d_padded.data, (2 * d->radius + 1) * calc_pad_size(vi->height, d->block_size, d->block_step) * calc_pad_size(vi->width, d->block_size, d->block_step) * vi->format->bytesPerSample); !success(result)) {
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
@@ -835,7 +890,7 @@ static void VS_CC DFTTestCreate(
         return ;
     }
 
-    if (auto result = cuMemAlloc(&d->d_spatial.data, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) * sizeof(float)); !success(result)) {
+    if (auto result = cuMemAlloc(&d->d_spatial.data, calc_pad_num(vi->height, d->block_size, d->block_step) * calc_pad_num(vi->width, d->block_size, d->block_step) * (2 * d->radius + 1) * square(d->block_size) * sizeof(cufftReal)); !success(result)) {
         std::ostringstream message;
         const char * error_message;
         showError(cuGetErrorString(result, &error_message));
@@ -1188,6 +1243,26 @@ static void VS_CC RDFT(
     vsapi->propSetFloatArray(out, "ret", h_frequency, complex_size * 2);
 }
 
+static void VS_CC ToSingle(
+    const VSMap *in, VSMap *out, void *userData,
+    VSCore *core, const VSAPI *vsapi
+) noexcept {
+
+    auto data = vsapi->propGetFloatArray(in, "data", nullptr);
+    int num = vsapi->propNumElements(in, "data");
+
+    auto converted_data = std::make_unique<double []>(num);
+    for (int i = 0; i < num; i++) {
+        converted_data[i] = static_cast<float>(data[i]);
+    }
+
+    if (num == 1) {
+        vsapi->propSetFloat(out, "ret", converted_data[0], paReplace);
+    } else {
+        vsapi->propSetFloatArray(out, "ret", converted_data.get(), num);
+    }
+}
+
 VS_EXTERNAL_API(void)
 VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
     configFunc("io.github.amusementclub.dfttest2_cuda", "dfttest2_cuda", "DFTTest2 (CUDA)", VAPOURSYNTH_API_VERSION, 1, plugin);
@@ -1209,5 +1284,11 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "shape:int[];"
         "device_id:int:opt;",
         RDFT, nullptr, plugin
+    );
+
+    registerFunc(
+        "ToSingle",
+        "data:float[];",
+        ToSingle, nullptr, plugin
     );
 }

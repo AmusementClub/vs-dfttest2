@@ -15,6 +15,9 @@ extern void filter(float2 & value, int x, int y, int z);
 // BLOCK_STEP
 // WARPS_PER_BLOCK
 // WARP_SIZE
+// TYPE
+// SCALE
+// PEAK (optional)
 
 #if ZERO_MEAN
 // __device__ const float window_freq[]; // frequency response of the window
@@ -30,12 +33,28 @@ static int calc_pad_num(int size, int block_size, int block_step) {
     return (calc_pad_size(size, block_size, block_step) - block_size) / block_step + 1;
 }
 
+__device__
+static float to_float(TYPE x) {
+    return static_cast<float>(x) * static_cast<float>(SCALE);
+}
+
+__device__
+static TYPE from_float(float x) {
+#ifdef PEAK
+    x /= static_cast<float>(SCALE);
+    x = fmaxf(0.0f, fminf(x, static_cast<float>(PEAK)));
+    return static_cast<TYPE>(__float2int_rz(x + 0.5f));
+#else // PEAK // only integral types define it
+    return static_cast<TYPE>(x / static_cast<float>(SCALE));
+#endif // PEAK
+}
+
 extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void im2col(
     float * __restrict__ dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    const float * __restrict__ srcp, // shape: (2*radius+1, vertical_size, horizontal_size)
+    const TYPE * __restrict__ srcp, // shape: (2*radius+1, vertical_size, horizontal_size)
     int width,
     int height
 ) {
@@ -59,7 +78,7 @@ void im2col(
             for (int k = threadIdx.x % WARP_SIZE; k < block_size * block_size; k += WARP_SIZE) {
                 int kx = k % block_size;
                 int ky = k / block_size;
-                dst[j * block_size * block_size + k] = src[ky * horizontal_size + kx] * window[j * block_size * block_size + k];
+                dst[j * block_size * block_size + k] = to_float(src[ky * horizontal_size + kx]) * window[j * block_size * block_size + k];
             }
         }
     }
@@ -125,7 +144,7 @@ extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void col2im(
-    float * __restrict__ dst, // shape: (2*radius+1, vertical_size, horizontal_size)
+    TYPE * __restrict__ dst, // shape: (2*radius+1, vertical_size, horizontal_size)
     const float * __restrict__ src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     int width,
     int height
@@ -166,7 +185,7 @@ void col2im(
         }
     }
 
-    dst[(radius * vertical_size + y) * horizontal_size + x] = sum;
+    dst[(radius * vertical_size + y) * horizontal_size + x] = from_float(sum);
 }
 )""";
 

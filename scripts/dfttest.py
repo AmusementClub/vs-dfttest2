@@ -183,12 +183,6 @@ def DFTTest2(
 ) -> vs.VideoNode:
     """ this interface is not stable """
 
-    if any((
-        clip.format.sample_type != vs.FLOAT,
-        clip.format.bits_per_sample != 32
-    )):
-        raise TypeError('"clip" must be of 32-bit float format')
-
     # translate parameters
     if ftype == 0:
         if abs(f0beta - 1) < 0.00005:
@@ -270,6 +264,8 @@ def DFTTest2(
             device_id=device_id
         )
 
+    to_single = core.dfttest2_cuda.ToSingle
+
     kernel = Template(
     """
     #define FILTER_TYPE ${filter_type}
@@ -301,7 +297,7 @@ def DFTTest2(
         return ;
     #endif
 
-        float psd = (value.x * value.x + value.y * value.y) * (255.0f * 255.0f);
+        float psd = value.x * value.x + value.y * value.y;
 
     #if FILTER_TYPE == 1
         if (psd < sigma) {
@@ -332,17 +328,17 @@ def DFTTest2(
     ).substitute(
         sigma_is_scalar=int(sigma_is_scalar),
         sigma=(
-            float(sigma_scalar)
+            to_single(sigma_scalar)
             if sigma_is_scalar
-            else ','.join(str(float(x)) for x in sigma_array)
+            else ','.join(str(to_single(x)) for x in sigma_array)
         ),
-        sigma2=float(sigma2),
-        pmin=float(pmin),
-        pmax=float(pmax),
+        sigma2=to_single(sigma2),
+        pmin=to_single(pmin),
+        pmax=to_single(pmax),
         filter_type=int(filter_type),
-        window_freq=','.join(str(float(x)) for x in window_freq),
+        window_freq=','.join(str(to_single(x)) for x in window_freq),
         zero_mean=int(zero_mean),
-        window=','.join(str(float(x)) for x in window),
+        window=','.join(str(to_single(x)) for x in window),
     )
 
     return core.dfttest2_cuda.DFTTest(
@@ -404,13 +400,13 @@ def DFTTest(
 ) -> vs.VideoNode:
     """ smode=1, tmode=0, ssystem=0 """
 
-    _sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]]
-
     def norm(x: float) -> float:
         if tbsize == 1:
             return math.sqrt(x)
         else:
             return x
+
+    _sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]]
 
     if slocation is not None:
         _sigma = [to_func(slocation, norm, sigma)] * 3
