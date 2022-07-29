@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import math
 from string import Template
 import typing
@@ -6,7 +7,19 @@ import vapoursynth as vs
 from vapoursynth import core
 
 
-__all__ = ["DFTTest", "DFTTest2"]
+__all__ = ["DFTTest", "DFTTest2", "Backend"]
+
+
+class Backend:
+    @dataclass(frozen=False)
+    class CUFFT:
+        device_id: int = 0
+
+
+def init_backend(backend: Backend.CUFFT) -> Backend.CUFFT:
+    if backend is Backend.CUFFT: # type: ignore
+        backend = Backend.CUFFT
+    return backend
 
 
 # https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
@@ -149,6 +162,8 @@ def get_window(
     return window
 
 
+# https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
+# bc5e0186a7f309556f20a8e9502f2238e39179b8/DFTTest/DFTTest.cpp#L581
 def get_sigma(
     position: float,
     length: int,
@@ -179,7 +194,8 @@ def DFTTest2(
     tbeta: float = 2.5,
     zmean: bool = True,
     f0beta: float = 1.0,
-    device_id: int = 0
+    planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
+    backend: Backend.CUFFT = Backend.CUFFT()
 ) -> vs.VideoNode:
     """ this interface is not stable """
 
@@ -202,7 +218,9 @@ def DFTTest2(
     spatial_beta = sbeta
     temporal_beta = tbeta
     zero_mean = zmean
+    backend = init_backend(backend)
 
+    # compute constants
     try:
         sigma_scalar = float(sigma) # type: ignore
         sigma_is_scalar = True
@@ -255,13 +273,13 @@ def DFTTest2(
         window_freq = core.dfttest2_cuda.RDFT(
             data=[w * 255 for w in window],
             shape=(block_size, block_size),
-            device_id=device_id
+            device_id=backend.device_id
         )
     else:
         window_freq = core.dfttest2_cuda.RDFT(
             data=[w * 255 for w in window],
             shape=(2 * radius + 1, block_size, block_size),
-            device_id=device_id
+            device_id=backend.device_id
         )
 
     to_single = core.dfttest2_cuda.ToSingle
@@ -347,7 +365,8 @@ def DFTTest2(
         block_size=block_size,
         radius=radius,
         block_step=block_step,
-        device_id=device_id
+        planes=planes,
+        device_id=backend.device_id
     )
 
 
@@ -396,7 +415,8 @@ def DFTTest(
     ssx: typing.Optional[typing.Sequence[float]] = None,
     ssy: typing.Optional[typing.Sequence[float]] = None,
     sst: typing.Optional[typing.Sequence[float]] = None,
-    device_id: int = 0
+    planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
+    backend: Backend.CUFFT = Backend.CUFFT()
 ) -> vs.VideoNode:
     """ smode=1, tmode=0, ssystem=0 """
 
@@ -431,5 +451,6 @@ def DFTTest(
         tbeta=tbeta,
         zmean=zmean,
         f0beta=f0beta,
-        device_id=device_id
+        planes=planes,
+        backend=backend
     )
