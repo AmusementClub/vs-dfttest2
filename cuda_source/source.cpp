@@ -266,21 +266,21 @@ static void reflection_padding(
     if (bytes_per_sample == 1) {
         reflection_padding_impl(
             static_cast<uint8_t *>(dst),
-            static_cast<const uint8_t *>(src), 
+            static_cast<const uint8_t *>(src),
             width, height, stride,
             block_size, block_step
         );
     } else if (bytes_per_sample == 2) {
         reflection_padding_impl(
             reinterpret_cast<uint16_t *>(dst),
-            reinterpret_cast<const uint16_t *>(src), 
+            reinterpret_cast<const uint16_t *>(src),
             width, height, stride,
             block_size, block_step
         );
     } else if (bytes_per_sample == 4) {
         reflection_padding_impl(
             reinterpret_cast<uint32_t *>(dst),
-            reinterpret_cast<const uint32_t *>(src), 
+            reinterpret_cast<const uint32_t *>(src),
             width, height, stride,
             block_size, block_step
         );
@@ -341,7 +341,7 @@ static std::variant<CUmodule, std::string> compile(
             type = "unsigned int";
         }
         kernel_source << "#define TYPE " << type << '\n';
-        kernel_source << "#define SCALE " << 1.0 / (1 << (bits_per_sample - 8)) << '\n';        
+        kernel_source << "#define SCALE " << 1.0 / (1 << (bits_per_sample - 8)) << '\n';
         kernel_source << "#define PEAK " << ((1 << bits_per_sample) - 1) << '\n';
     } else if (sample_type == stFloat) {
         if (bits_per_sample == 32) {
@@ -419,6 +419,7 @@ struct DFTTestData {
     int radius;
     int block_size;
     int block_step;
+    std::array<bool, 3> process;
     CUdevice device; // device_id
     int warp_size;
     int warps_per_block = 4; // most existing devices contain four schedulers per sm
@@ -546,6 +547,10 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         };
 
         for (int plane = 0; plane < format->numPlanes; plane++) {
+            if (!d->process[plane]) {
+                continue;
+            }
+
             int width = vsapi->getFrameWidth(src_center_frame.get(), plane);
             int height = vsapi->getFrameHeight(src_center_frame.get(), plane);
             int stride = vsapi->getStride(src_center_frame.get(), plane) / vi->format->bytesPerSample;
@@ -746,6 +751,22 @@ static void VS_CC DFTTestCreate(
     d->block_step = int64ToIntS(vsapi->propGetInt(in, "block_step", 0, &error));
     if (error) {
         d->block_step = d->block_size;
+    }
+
+    int num_planes_args = vsapi->propNumElements(in, "planes");
+    d->process.fill(num_planes_args <= 0);
+    for (int i = 0; i < num_planes_args; ++i) {
+        int plane = static_cast<int>(vsapi->propGetInt(in, "planes", i, nullptr));
+
+        if (plane < 0 || plane >= vi->format->numPlanes) {
+            vsapi->setError(out, "plane index out of range");
+            return ;
+        }
+
+        if (d->process[plane]) {
+            vsapi->setError(out, "plane specified twice");
+            return ;
+        }
     }
 
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
@@ -1274,6 +1295,7 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "radius:int:opt;"
         "block_size:int:opt;"
         "block_step:int:opt;"
+        "planes:int[]:opt;"
         "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
     );
