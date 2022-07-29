@@ -6,7 +6,10 @@ set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
 find_package(CUDAToolkit REQUIRED)
 
-add_library(dfttest2_cuda SHARED cuda_source/source.cpp)
+add_library(dfttest2_cuda SHARED
+    cuda_source/source.cpp
+    cuda_source/win32.cpp
+)
 
 set_target_properties(dfttest2_cuda PROPERTIES
     CXX_EXTENSIONS OFF
@@ -91,3 +94,7 @@ endif()
 configure_file(common/config.h.in config.h)
 
 target_include_directories(dfttest2_cuda PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+if (WIN32)
+    target_link_options(dfttest2_cuda PRIVATE "/DELAYLOAD:cufft64_10.dll" "delayimp.lib")
+endif()
