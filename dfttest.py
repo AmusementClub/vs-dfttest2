@@ -28,17 +28,17 @@ def init_backend(backend: Backend.CUFFT) -> Backend.CUFFT:
 # bc5e0186a7f309556f20a8e9502f2238e39179b8/DFTTest/DFTTest.cpp#L518
 def normalize(
     window: typing.Sequence[float],
-    block_size: int,
-    block_step: int
+    size: int,
+    step: int
 ) -> typing.List[float]:
 
-    nw = [0.0] * block_size
-    for q in range(block_size):
-        for h in range(q, -1, -block_step):
+    nw = [0.0] * size
+    for q in range(size):
+        for h in range(q, -1, -step):
             nw[q] += window[h] ** 2
-        for h in range(q + block_step, block_size, block_step):
+        for h in range(q + step, size, step):
             nw[q] += window[h] ** 2
-    return [window[q] / math.sqrt(nw[q]) for q in range(block_size)]
+    return [window[q] / math.sqrt(nw[q]) for q in range(size)]
 
 
 # https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
@@ -123,7 +123,7 @@ def get_window(
     spatial_window_mode: int,
     spatial_beta: float,
     temporal_window_mode: int,
-    temporal_beta: float,
+    temporal_beta: float
 ) -> typing.List[float]:
 
     temporal_window = [
@@ -146,8 +146,8 @@ def get_window(
 
     spatial_window = normalize(
         window=spatial_window,
-        block_size=block_size,
-        block_step=block_step
+        size=block_size,
+        step=block_step
     )
 
     window = []
@@ -166,6 +166,21 @@ def get_window(
 
 # https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
 # bc5e0186a7f309556f20a8e9502f2238e39179b8/DFTTest/DFTTest.cpp#L581
+def get_location(
+    position: float,
+    length: int
+) -> float:
+
+    if length == 1:
+        return 0.0
+    elif position > length // 2:
+        return (length - position) / (length // 2)
+    else:
+        return position / (length // 2)
+
+
+# https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
+# bc5e0186a7f309556f20a8e9502f2238e39179b8/DFTTest/DFTTest.cpp#L581
 def get_sigma(
     position: float,
     length: int,
@@ -174,10 +189,8 @@ def get_sigma(
 
     if length == 1:
         return 1.0
-    elif position > length // 2:
-        return func((length - position) / (length // 2))
     else:
-        return func(position / (length // 2))
+        return func(get_location(position, length))
 
 
 def DFTTest2(
@@ -196,6 +209,7 @@ def DFTTest2(
     tbeta: float = 2.5,
     zmean: bool = True,
     f0beta: float = 1.0,
+    ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
     backend: Backend.CUFFT = Backend.CUFFT()
 ) -> vs.VideoNode:
@@ -241,13 +255,28 @@ def DFTTest2(
 
         sigma_array = []
 
-        for t in range(2 * radius + 1):
-            sigma_t = get_sigma(position=t, length=2*radius+1, func=sigma_func_t)
-            for y in range(block_size):
-                sigma_y = get_sigma(position=y, length=block_size, func=sigma_func_y)
-                for x in range(block_size // 2 + 1):
-                    sigma_x = get_sigma(position=x, length=block_size, func=sigma_func_x)
-                    sigma_array.append(sigma_t * sigma_y * sigma_x)
+        if ssystem == 0:
+            for t in range(2 * radius + 1):
+                sigma_t = get_sigma(position=t, length=2*radius+1, func=sigma_func_t)
+                for y in range(block_size):
+                    sigma_y = get_sigma(position=y, length=block_size, func=sigma_func_y)
+                    for x in range(block_size // 2 + 1):
+                        sigma_x = get_sigma(position=x, length=block_size, func=sigma_func_x)
+
+                        sigma = sigma_t * sigma_y * sigma_x
+                        sigma_array.append(sigma)
+        else:
+            for t in range(2 * radius + 1):
+                loc_t = get_location(position=t, length=2*radius+1)
+                for y in range(block_size):
+                    loc_y = get_location(position=y, length=block_size)
+                    for x in range(block_size // 2 + 1):
+                        loc_x = get_location(position=x, length=block_size)
+
+                        ndim = 3 if radius > 0 else 2
+                        location = math.sqrt((loc_t * loc_t + loc_y * loc_y + loc_x * loc_x) / ndim)
+                        sigma = sigma_func_t(location)
+                        sigma_array.append(sigma)
 
     window = get_window(
         radius=radius,
@@ -405,28 +434,44 @@ def DFTTest(
     pmin: float = 0.0,
     pmax: float = 500.0,
     sbsize: int = 16,
+    smode: int = 1,
     sosize: int = 12,
     tbsize: int = 3,
+    tmode: int = 0,
+    tosize: int = 0,
     swin: int = 0,
     twin: int = 7,
     sbeta: float = 2.5,
     tbeta: float = 2.5,
     zmean: bool = True,
     f0beta: float = 1.0,
+    nlocation: typing.Optional[typing.Sequence[int]] = None,
+    alpha: typing.Optional[float] = None,
     slocation: typing.Optional[typing.Sequence[float]] = None,
     ssx: typing.Optional[typing.Sequence[float]] = None,
     ssy: typing.Optional[typing.Sequence[float]] = None,
     sst: typing.Optional[typing.Sequence[float]] = None,
+    ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
     backend: Backend.CUFFT = Backend.CUFFT()
 ) -> vs.VideoNode:
-    """ smode=1, tmode=0, ssystem=0 """
+
+    if smode != 1:
+        raise ValueError('"smode" must be 1')
+
+    if tmode != 0:
+        raise ValueError('"tmode" must be 0')
+
+    if nlocation is not None:
+        raise ValueError('"nlocation" must be None')
 
     def norm(x: float) -> float:
-        if tbsize == 1:
+        if slocation is not None and ssystem == 1:
+            return x
+        elif tbsize == 1:
             return math.sqrt(x)
         else:
-            return x
+            return x ** (1 / 3)
 
     _sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]]
 
@@ -453,6 +498,7 @@ def DFTTest(
         tbeta=tbeta,
         zmean=zmean,
         f0beta=f0beta,
+        ssystem=ssystem,
         planes=planes,
         backend=backend
     )
