@@ -1,3 +1,5 @@
+__version__ = "0.0.1"
+
 from dataclasses import dataclass
 import math
 from string import Template
@@ -18,7 +20,7 @@ class Backend:
 
 def init_backend(backend: Backend.CUFFT) -> Backend.CUFFT:
     if backend is Backend.CUFFT: # type: ignore
-        backend = Backend.CUFFT
+        backend = Backend.CUFFT()
     return backend
 
 
