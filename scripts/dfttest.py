@@ -6,7 +6,7 @@ import vapoursynth as vs
 from vapoursynth import core
 
 
-__all__ = ["DFTTest"]
+__all__ = ["DFTTest", "DFTTest2"]
 
 
 # https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/blob/
@@ -58,7 +58,7 @@ def get_window_value(location: float, size: int, mode: int, beta: float) -> floa
                     break
             return t
         v = 2 * location / size - 1
-        return i0(pi * beta * math.sqrt(1 - v * v)) / i0(math.pi * beta)
+        return i0(math.pi * beta * math.sqrt(1 - v * v)) / i0(math.pi * beta)
     elif mode == 5: # 7 term blackman-harris
         return (
             0.27105140069342415
@@ -129,7 +129,11 @@ def get_window(
         ) for i in range(block_size)
     ]
 
-    spatial_window = normalize(window=spatial_window, block_size=block_size, block_step=block_step)
+    spatial_window = normalize(
+        window=spatial_window,
+        block_size=block_size,
+        block_step=block_step
+    )
 
     window = []
     for t_val in temporal_window:
@@ -145,10 +149,24 @@ def get_window(
     return window
 
 
-def DFTTest(
+def get_sigma(
+    position: float,
+    length: int,
+    func: typing.Callable[[float], float]
+) -> float:
+
+    if length == 1:
+        return 1.0
+    elif position > length // 2:
+        return func((length - position) / (length // 2))
+    else:
+        return func(position / (length // 2))
+
+
+def DFTTest2(
     clip: vs.VideoNode,
     ftype: int = 0,
-    sigma: float = 8.0,
+    sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]] = 8.0,
     sigma2: float = 8.0,
     pmin: float = 0.0,
     pmax: float = 500.0,
@@ -163,6 +181,7 @@ def DFTTest(
     f0beta: float = 1.0,
     device_id: int = 0
 ) -> vs.VideoNode:
+    """ this interface is not stable """
 
     if any((
         clip.format.sample_type != vs.FLOAT,
@@ -190,6 +209,32 @@ def DFTTest(
     temporal_beta = tbeta
     zero_mean = zmean
 
+    try:
+        sigma_scalar = float(sigma) # type: ignore
+        sigma_is_scalar = True
+    except:
+        # compute sigma_array
+
+        sigma_is_scalar = False
+
+        sigma_funcs = typing.cast(typing.Sequence[typing.Callable[[float], float]], sigma)
+        if callable(sigma_funcs):
+            sigma_funcs = [sigma_funcs]
+        else:
+            sigma_funcs = list(sigma_funcs)
+        sigma_funcs.extend([sigma_funcs[-1]] * 3)
+        sigma_func_x, sigma_func_y, sigma_func_t = sigma_funcs[:3]
+
+        sigma_array = []
+
+        for t in range(2 * radius + 1):
+            sigma_t = get_sigma(position=t, length=2*radius+1, func=sigma_func_t)
+            for y in range(block_size):
+                sigma_y = get_sigma(position=y, length=block_size, func=sigma_func_y)
+                for x in range(block_size // 2 + 1):
+                    sigma_x = get_sigma(position=x, length=block_size, func=sigma_func_x)
+                    sigma_array.append(sigma_t * sigma_y * sigma_x)
+
     window = get_window(
         radius=radius,
         block_size=block_size,
@@ -203,7 +248,10 @@ def DFTTest(
     wscale = math.fsum(w * w for w in window)
 
     if ftype < 2:
-        sigma *= wscale
+        if sigma_is_scalar:
+            sigma_scalar *= wscale
+        else:
+            sigma_array = [s * wscale for s in sigma_array]
         sigma2 *= wscale
 
     pmin *= wscale
@@ -226,6 +274,7 @@ def DFTTest(
     """
     #define FILTER_TYPE ${filter_type}
     #define ZERO_MEAN ${zero_mean}
+    #define SIGMA_IS_SCALAR ${sigma_is_scalar}
 
     #if ZERO_MEAN
     __device__ static const float window_freq[] { ${window_freq} };
@@ -234,8 +283,13 @@ def DFTTest(
     __device__ static const float window[] { ${window} };
 
     __device__
-    static void filter(float2 & value, int x, int y, int z) {
+    static void filter(float2 & value, int x, int y, int t) {
+    #if SIGMA_IS_SCALAR
         float sigma = static_cast<float>(${sigma});
+    #else // SIGMA_IS_SCALAR
+        __device__ static const float sigma_array[] { ${sigma} };
+        float sigma = sigma_array[(t * BLOCK_SIZE + y) * (BLOCK_SIZE / 2 + 1) + x];
+    #endif // SIGMA_IS_SCALAR
         [[maybe_unused]] float sigma2 = static_cast<float>(${sigma2});
         [[maybe_unused]] float pmin = static_cast<float>(${pmin});
         [[maybe_unused]] float pmax = static_cast<float>(${pmax});
@@ -276,7 +330,12 @@ def DFTTest(
     }
     """
     ).substitute(
-        sigma=float(sigma),
+        sigma_is_scalar=int(sigma_is_scalar),
+        sigma=(
+            float(sigma_scalar)
+            if sigma_is_scalar
+            else ','.join(str(float(x)) for x in sigma_array)
+        ),
         sigma2=float(sigma2),
         pmin=float(pmin),
         pmax=float(pmax),
@@ -292,5 +351,89 @@ def DFTTest(
         block_size=block_size,
         radius=radius,
         block_step=block_step,
+        device_id=device_id
+    )
+
+
+def to_func(
+    data: typing.Optional[typing.Sequence[float]],
+    norm: typing.Callable[[float], float],
+    sigma: float
+) -> typing.Callable[[float], float]:
+
+    if data is None:
+        return lambda _: norm(sigma)
+
+    locations = data[::2]
+    sigmas = data[1::2]
+    packs = list(zip(locations, sigmas))
+    packs = sorted(packs, key=lambda group: group[0])
+
+    def func(x: float) -> float:
+        length = len(packs)
+        for i in range(length - 1):
+            if x <= packs[i + 1][0]:
+                weight = (x - packs[i][0]) / (packs[i + 1][0] - packs[i][0])
+                return (1 - weight) * norm(packs[i][1]) + weight * norm(packs[i + 1][1])
+        raise ValueError()
+
+    return func
+
+
+def DFTTest(
+    clip: vs.VideoNode,
+    ftype: int = 0,
+    sigma: float = 8.0,
+    sigma2: float = 8.0,
+    pmin: float = 0.0,
+    pmax: float = 500.0,
+    sbsize: int = 16,
+    sosize: int = 12,
+    tbsize: int = 3,
+    swin: int = 0,
+    twin: int = 7,
+    sbeta: float = 2.5,
+    tbeta: float = 2.5,
+    zmean: bool = True,
+    f0beta: float = 1.0,
+    slocation: typing.Optional[typing.Sequence[float]] = None,
+    ssx: typing.Optional[typing.Sequence[float]] = None,
+    ssy: typing.Optional[typing.Sequence[float]] = None,
+    sst: typing.Optional[typing.Sequence[float]] = None,
+    device_id: int = 0
+) -> vs.VideoNode:
+    """ smode=1, tmode=0, ssystem=0 """
+
+    _sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]]
+
+    def norm(x: float) -> float:
+        if tbsize == 1:
+            return math.sqrt(x)
+        else:
+            return x
+
+    if slocation is not None:
+        _sigma = [to_func(slocation, norm, sigma)] * 3
+    elif any(ss is not None for ss in (ssx, ssy, sst)):
+        _sigma = [to_func(ss, norm, sigma) for ss in (ssx, ssy, sst)]
+    else:
+        _sigma = sigma
+
+    return DFTTest2(
+        clip=clip,
+        ftype=ftype,
+        sigma=_sigma,
+        sigma2=sigma2,
+        pmin=pmin,
+        pmax=pmax,
+        sbsize=sbsize,
+        sosize=sosize,
+        tbsize=tbsize,
+        swin=swin,
+        twin=twin,
+        sbeta=sbeta,
+        tbeta=tbeta,
+        zmean=zmean,
+        f0beta=f0beta,
         device_id=device_id
     )
