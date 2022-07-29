@@ -99,9 +99,9 @@ jobs:
         
         cd ../cufft
 
-        mkdir cufft-windows-${{ github.event.inputs.tag }}
-        xcopy cufft64_*.dll cufft-windows-${{ github.event.inputs.tag }} /f
-        7z a -t7z -mx=9 ../cufft-windows-${{ github.event.inputs.tag }}.7z cufft-windows-${{ github.event.inputs.tag }}
+        mkdir vsmlrt-cuda
+        xcopy cufft64_*.dll vsmlrt-cuda /f
+        7z a -t7z -mx=9 ../cufft-windows-${{ github.event.inputs.tag }}.7z vsmlrt-cuda
 
     - name: Release
       uses: softprops/action-gh-release@v1
