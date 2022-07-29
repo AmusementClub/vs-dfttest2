@@ -543,8 +543,14 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         auto & src_center_frame = src_frames[d->radius];
         auto format = vsapi->getFrameFormat(src_center_frame.get());
 
+        const VSFrameRef * fr[] {
+            d->process[0] ? nullptr : src_center_frame.get(), 
+            d->process[1] ? nullptr : src_center_frame.get(), 
+            d->process[2] ? nullptr : src_center_frame.get()
+        };
+        const int pl[] { 0, 1, 2 };
         std::unique_ptr<VSFrameRef, decltype(vsapi->freeFrame)> dst_frame {
-            vsapi->newVideoFrame(format, vi->width, vi->height, src_center_frame.get(), core),
+            vsapi->newVideoFrame2(format, vi->width, vi->height, fr, pl, src_center_frame.get(), core),
             vsapi->freeFrame
         };
 
