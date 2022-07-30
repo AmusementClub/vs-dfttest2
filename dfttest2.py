@@ -14,13 +14,13 @@ __all__ = ["DFTTest", "DFTTest2", "Backend"]
 
 class Backend:
     @dataclass(frozen=False)
-    class CUFFT:
+    class cuFFT:
         device_id: int = 0
 
 
-def init_backend(backend: Backend.CUFFT) -> Backend.CUFFT:
-    if backend is Backend.CUFFT: # type: ignore
-        backend = Backend.CUFFT()
+def init_backend(backend: Backend.cuFFT) -> Backend.cuFFT:
+    if backend is Backend.cuFFT: # type: ignore
+        backend = Backend.cuFFT()
     return backend
 
 
@@ -211,7 +211,7 @@ def DFTTest2(
     f0beta: float = 1.0,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
-    backend: Backend.CUFFT = Backend.CUFFT()
+    backend: Backend.cuFFT = Backend.cuFFT()
 ) -> vs.VideoNode:
     """ this interface is not stable """
 
@@ -452,7 +452,7 @@ def DFTTest(
     sst: typing.Optional[typing.Sequence[float]] = None,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
-    backend: Backend.CUFFT = Backend.CUFFT()
+    backend: Backend.cuFFT = Backend.cuFFT()
 ) -> vs.VideoNode:
 
     if (
