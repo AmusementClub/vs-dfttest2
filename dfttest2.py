@@ -437,8 +437,7 @@ def DFTTest(
     smode: typing.Literal[0, 1] = 1,
     sosize: int = 12,
     tbsize: int = 3,
-    tmode: typing.Literal[0, 1] = 0,
-    tosize: int = 0,
+    # tmode=0, tosize=0
     swin: typing.Literal[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] = 0,
     twin: typing.Literal[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] = 7,
     sbeta: float = 2.5,
@@ -458,9 +457,6 @@ def DFTTest(
 
     if smode != 1:
         raise ValueError('"smode" must be 1')
-
-    if tmode != 0:
-        raise ValueError('"tmode" must be 0')
 
     if nlocation is not None:
         raise ValueError('"nlocation" must be None')
