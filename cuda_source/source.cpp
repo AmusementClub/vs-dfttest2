@@ -788,6 +788,8 @@ static void VS_CC DFTTestCreate(
             vsapi->setError(out, "plane specified twice");
             return ;
         }
+
+        d->process[plane] = true;
     }
 
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
