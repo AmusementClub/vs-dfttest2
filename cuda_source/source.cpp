@@ -391,13 +391,26 @@ static std::variant<CUmodule, std::string> compile(
         return error_message;
     }
 
-    size_t cubin_size;
-    if (auto result = nvrtcGetCUBINSize(program, &cubin_size); !success(result)) {
-        return std::string{nvrtcGetErrorString(result)};
-    }
-    auto image = std::make_unique<char[]>(cubin_size);
-    if (auto result = nvrtcGetCUBIN(program, image.get()); !success(result)) {
-        return std::string{nvrtcGetErrorString(result)};
+    std::unique_ptr<char []> image;
+
+    if (generate_cubin) {
+        size_t cubin_size;
+        if (auto result = nvrtcGetCUBINSize(program, &cubin_size); !success(result)) {
+            return std::string{nvrtcGetErrorString(result)};
+        }
+        image = std::make_unique<char[]>(cubin_size);
+        if (auto result = nvrtcGetCUBIN(program, image.get()); !success(result)) {
+            return std::string{nvrtcGetErrorString(result)};
+        }
+    } else {
+        size_t ptx_size;
+        if (auto result = nvrtcGetPTXSize(program, &ptx_size); !success(result)) {
+            return std::string{nvrtcGetErrorString(result)};
+        }
+        image = std::make_unique<char[]>(ptx_size);
+        if (auto result = nvrtcGetPTX(program, image.get()); !success(result)) {
+            return std::string{nvrtcGetErrorString(result)};
+        }
     }
 
     CUmodule module;
@@ -544,8 +557,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         auto format = vsapi->getFrameFormat(src_center_frame.get());
 
         const VSFrameRef * fr[] {
-            d->process[0] ? nullptr : src_center_frame.get(), 
-            d->process[1] ? nullptr : src_center_frame.get(), 
+            d->process[0] ? nullptr : src_center_frame.get(),
+            d->process[1] ? nullptr : src_center_frame.get(),
             d->process[2] ? nullptr : src_center_frame.get()
         };
         const int pl[] { 0, 1, 2 };
