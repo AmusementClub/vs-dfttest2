@@ -455,11 +455,51 @@ def DFTTest(
     backend: Backend.CUFFT = Backend.CUFFT()
 ) -> vs.VideoNode:
 
+    if (
+        not isinstance(clip, vs.VideoNode) or
+        clip.width == 0 or
+        clip.height == 0 or
+        clip.format is None or
+        (clip.format.sample_type == vs.INTEGER and clip.format.bits_per_sample > 16) or
+        (clip.format.sample_type == vs.FLOAT and clip.format.bits_per_sample != 32)
+    ):
+        raise ValueError("only constant format 8-16 bit integer and 32 bit float input supported")
+
+    if ftype < 0 or ftype > 4:
+        raise ValueError("ftype must be 0, 1, 2, 3, or 4")
+
+    if sbsize < 1:
+        raise ValueError("sbsize must be greater than or equal to 1")
+
     if smode != 1:
         raise ValueError('"smode" must be 1')
 
+    if sosize > sbsize // 2 and (sbsize % (sbsize - sosize) != 0):
+        raise ValueError("spatial overlap greater than 50% requires that sbsize-sosize is a divisor of sbsize")
+
+    if swin < 0 or swin > 11:
+        raise ValueError("swin must be between 0 and 11 (inclusive)")
+
+    if twin < 0 or twin > 11:
+        raise ValueError("twin must be between 0 and 11 (inclusive)")
+
     if nlocation is not None:
         raise ValueError('"nlocation" must be None')
+
+    if slocation and len(slocation) % 2 != 0:
+        raise ValueError("number of elements in slocation must be a multiple of 2")
+
+    if ssx and len(ssx) % 2 != 0:
+        raise ValueError("number of elements in ssx must be a multiple of 2")
+
+    if ssy and len(ssy) % 2 != 0:
+        raise ValueError("number of elements in ssy must be a multiple of 2")
+
+    if sst and len(sst) % 2 != 0:
+        raise ValueError("number of elements in sst must be a multiple of 2")
+
+    if ssystem < 0 or ssystem > 1:
+        raise ValueError("ssystem must be 0 or 1")
 
     def norm(x: float) -> float:
         if slocation is not None and ssystem == 1:
