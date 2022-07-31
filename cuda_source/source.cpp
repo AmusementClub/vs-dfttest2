@@ -449,9 +449,6 @@ struct DFTTestData {
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
 
-    // shape: (pad_height, pad_width)
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_padded;
-
     // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
 
@@ -465,6 +462,9 @@ struct DFTTestData {
     Resource<cufftHandle, cufftDestroyCustom, true> irfft_handle;
     Resource<cufftHandle, cufftDestroyCustom, true> subsampled_rfft_handle;
     Resource<cufftHandle, cufftDestroyCustom, true> subsampled_irfft_handle;
+
+    // padded shape: (pad_height, pad_width)
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_work_area_or_padded;
 
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction filter_kernel;
@@ -613,9 +613,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             CUdeviceptr d_buffer = d->in_place ? d->d_frequency.data : d->d_spatial.data;
 
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format->bytesPerSample;
-            checkError(cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, padded_bytes, d->stream));
+            checkError(cuMemcpyHtoDAsync(d->d_work_area_or_padded.data, thread_data.h_padded, padded_bytes, d->stream));
             {
-                void * params[] { &d_buffer, &d->d_padded.data, &width, &height };
+                void * params[] { &d_buffer, &d->d_work_area_or_padded.data, &width, &height };
                 checkError(cuLaunchKernel(
                     d->im2col_kernel,
                     d->im2col_num_blocks, 1, 1,
@@ -651,7 +651,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 (cufftReal *) d_buffer
             ));
             {
-                void * params[] { &d->d_padded.data, &d_buffer, &width, &height };
+                void * params[] { &d->d_work_area_or_padded.data, &d_buffer, &width, &height };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -673,7 +673,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     .srcY = (pad_height - height) / 2,
                     .srcZ = (size_t) d->radius,
                     .srcMemoryType = CU_MEMORYTYPE_DEVICE,
-                    .srcDevice = d->d_padded.data,
+                    .srcDevice = d->d_work_area_or_padded.data,
                     .srcPitch = pad_width * vi->format->bytesPerSample,
                     .srcHeight = pad_height,
                     .dstXInBytes = (pad_width - width) / 2 * vi->format->bytesPerSample,
@@ -865,7 +865,8 @@ static void VS_CC DFTTestCreate(
         calc_pad_size(vi->width, d->block_size, d->block_step) *
         vi->format->bytesPerSample
     );
-    checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
+    // merge allocation to fft's work_area
+    // checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
 
     if (!d->in_place) {
         size_t spatial_bytes = (
@@ -886,11 +887,12 @@ static void VS_CC DFTTestCreate(
         (d->block_size / 2 + 1) *
         sizeof(cufftComplex)
     );
-
     checkError(cuMemAlloc(&d->d_frequency.data, frequency_bytes));
 
     // init cufft
     {
+        size_t max_work_size { padded_bytes };
+
         int batch = (
             calc_pad_num(vi->height, d->block_size, d->block_step) *
             calc_pad_num(vi->width, d->block_size, d->block_step)
@@ -907,6 +909,12 @@ static void VS_CC DFTTestCreate(
             nullptr, 1, 0,
             CUFFT_R2C, batch
         ));
+        {
+            size_t work_size;
+            checkError(cufftGetSize(d->rfft_handle, &work_size));
+            max_work_size = std::max(max_work_size, work_size);
+        }
+        checkError(cufftSetWorkArea(d->rfft_handle, nullptr)); // free work area
         checkError(cufftSetStream(d->rfft_handle, d->stream));
 
         checkError(cufftPlanMany(
@@ -916,6 +924,12 @@ static void VS_CC DFTTestCreate(
             nullptr, 1, 0,
             CUFFT_C2R, batch
         ));
+        {
+            size_t work_size;
+            checkError(cufftGetSize(d->irfft_handle, &work_size));
+            max_work_size = std::max(max_work_size, work_size);
+        }
+        checkError(cufftSetWorkArea(d->irfft_handle, nullptr)); // free work area
         checkError(cufftSetStream(d->irfft_handle, d->stream));
 
         if (vi->format->subSamplingW != 0 || vi->format->subSamplingH != 0) {
@@ -931,6 +945,12 @@ static void VS_CC DFTTestCreate(
                 nullptr, 1, 0,
                 CUFFT_R2C, subsampled_batch
             ));
+            {
+                size_t work_size;
+                checkError(cufftGetSize(d->subsampled_rfft_handle, &work_size));
+                max_work_size = std::max(max_work_size, work_size);
+            }
+            checkError(cufftSetWorkArea(d->subsampled_rfft_handle, nullptr)); // free work area
             checkError(cufftSetStream(d->subsampled_rfft_handle, d->stream));
 
             checkError(cufftPlanMany(
@@ -940,7 +960,21 @@ static void VS_CC DFTTestCreate(
                 nullptr, 1, 0,
                 CUFFT_C2R, subsampled_batch
             ));
+            {
+                size_t work_size;
+                checkError(cufftGetSize(d->subsampled_irfft_handle, &work_size));
+                max_work_size = std::max(max_work_size, work_size);
+            }
+            checkError(cufftSetWorkArea(d->subsampled_irfft_handle, nullptr)); // free work area
             checkError(cufftSetStream(d->subsampled_irfft_handle, d->stream));
+        }
+
+        checkError(cuMemAlloc(&d->d_work_area_or_padded.data, max_work_size));
+        checkError(cufftSetWorkArea(d->rfft_handle, (void *) d->d_work_area_or_padded.data));
+        checkError(cufftSetWorkArea(d->irfft_handle, (void *) d->d_work_area_or_padded.data));
+        if (vi->format->subSamplingW != 0 || vi->format->subSamplingH != 0) {
+            checkError(cufftSetWorkArea(d->subsampled_rfft_handle, (void *) d->d_work_area_or_padded.data));
+            checkError(cufftSetWorkArea(d->subsampled_irfft_handle, (void *) d->d_work_area_or_padded.data));
         }
     }
 
