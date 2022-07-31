@@ -16,6 +16,7 @@ class Backend:
     @dataclass(frozen=False)
     class cuFFT:
         device_id: int = 0
+        in_place: bool = False
 
 
 def init_backend(backend: Backend.cuFFT) -> Backend.cuFFT:
@@ -397,6 +398,7 @@ def DFTTest2(
         radius=radius,
         block_step=block_step,
         planes=planes,
+        in_place=backend.in_place,
         device_id=backend.device_id
     )
 
