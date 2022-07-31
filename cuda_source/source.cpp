@@ -93,7 +93,7 @@ static void show_error_impl(T result, const char * source, int line_no) {
 }
 
 #define checkError(expr) do {                                                       \
-    if (auto result = expr; !success(result)) {                                     \
+    if (auto result = expr; !success(result)) [[unlikely]] {                        \
         std::ostringstream error;                                                   \
         error << '[' << __LINE__ << "] '" # expr "' failed: " << get_error(result); \
         return set_error(error.str().c_str());                                      \
@@ -518,14 +518,15 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
     auto thread_id = std::this_thread::get_id();
     if (d->num_uninitialized_threads.load(std::memory_order::acquire) == 0) {
-        const auto & const_padded = d->thread_data;
-        thread_data = const_padded.at(thread_id);
+        const auto & const_data = d->thread_data;
+        thread_data = const_data.at(thread_id);
     } else {
         bool initialized = true;
 
         d->thread_data_lock.lock_shared();
         try {
-            thread_data = d->thread_data.at(thread_id);
+            const auto & const_data = d->thread_data;
+            thread_data = const_data.at(thread_id);
         } catch (const std::out_of_range &) {
             initialized = false;
         }
