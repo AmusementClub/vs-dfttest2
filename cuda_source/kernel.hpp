@@ -13,6 +13,7 @@ extern void filter(float2 & value, int x, int y, int z);
 // RADIUS
 // BLOCK_SIZE
 // BLOCK_STEP
+// IN_PLACE
 // WARPS_PER_BLOCK
 // WARP_SIZE
 // TYPE
@@ -53,7 +54,8 @@ extern "C"
 __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void im2col(
-    float * __restrict__ dstp, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, padded_block_size)
+    float * __restrict__ dstp,
     const TYPE * __restrict__ srcp, // shape: (2*radius+1, vertical_size, horizontal_size)
     int width,
     int height
@@ -61,6 +63,7 @@ void im2col(
 
     int radius = static_cast<int>(RADIUS);
     int block_size = static_cast<int>(BLOCK_SIZE);
+    int padded_block_size = IN_PLACE ? (block_size / 2 + 1) * 2 : block_size;
     int block_step = static_cast<int>(BLOCK_STEP);
 
     int horizontal_num = calc_pad_num(width, block_size, block_step);
@@ -72,13 +75,18 @@ void im2col(
     for (int i = blockIdx.x * WARPS_PER_BLOCK + threadIdx.x / WARP_SIZE; i < num_blocks; i += gridDim.x * WARPS_PER_BLOCK) {
         int ix = i % horizontal_num;
         int iy = i / horizontal_num;
-        auto dst = &dstp[i * (2 * radius + 1) * block_size * block_size];
+        auto dst = &dstp[i * (2 * radius + 1) * block_size * padded_block_size];
         for (int j = 0; j < 2 * radius + 1; j++) {
             auto src = &srcp[(j * vertical_size + iy * block_step) * horizontal_size + ix * block_step];
             for (int k = threadIdx.x % WARP_SIZE; k < block_size * block_size; k += WARP_SIZE) {
                 int kx = k % block_size;
                 int ky = k / block_size;
-                dst[j * block_size * block_size + k] = to_float(src[ky * horizontal_size + kx]) * window[j * block_size * block_size + k];
+                float val = to_float(src[ky * horizontal_size + kx]) * window[j * block_size * block_size + k];
+#if IN_PLACE == 1
+                dst[(j * block_size + k / block_size) * padded_block_size + k % block_size] = val;
+#else
+                dst[j * block_size * block_size + k] = val;
+#endif
             }
         }
     }
@@ -145,13 +153,15 @@ __launch_bounds__(WARPS_PER_BLOCK * WARP_SIZE)
 __global__
 void col2im(
     TYPE * __restrict__ dst, // shape: (2*radius+1, vertical_size, horizontal_size)
-    const float * __restrict__ src, // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, padded_block_size)
+    const float * __restrict__ src,
     int width,
     int height
 ) {
 
     int radius = static_cast<int>(RADIUS);
     int block_size = static_cast<int>(BLOCK_SIZE);
+    int padded_block_size = IN_PLACE ? (block_size / 2 + 1) * 2 : block_size;
     int block_step = static_cast<int>(BLOCK_STEP);
 
     // each thread is responsible for a single pixel
@@ -179,7 +189,7 @@ void col2im(
         int offset_y = y - i * block_step;
         for (int j = j1; j <= j2; j++) {
             int offset_x = x - j * block_step;
-            auto src_offset = (((i * horizontal_num + j) * (2 * radius + 1) + radius) * block_size + offset_y) * block_size + offset_x;
+            auto src_offset = (((i * horizontal_num + j) * (2 * radius + 1) + radius) * block_size + offset_y) * padded_block_size + offset_x;
             auto window_offset = (radius * block_size + offset_y) * block_size + offset_x;
             sum += src[src_offset] * window[window_offset];
         }

@@ -317,6 +317,7 @@ static std::variant<CUmodule, std::string> compile(
     int radius,
     int block_size,
     int block_step,
+    bool in_place,
     int warp_size,
     int warps_per_block,
     int sample_type,
@@ -345,6 +346,7 @@ static std::variant<CUmodule, std::string> compile(
     kernel_source << "#define RADIUS " << radius << '\n';
     kernel_source << "#define BLOCK_SIZE " << block_size << '\n';
     kernel_source << "#define BLOCK_STEP " << block_step << '\n';
+    kernel_source << "#define IN_PLACE " << (int) in_place << '\n';
     kernel_source << "#define WARP_SIZE " << warp_size << '\n';
     kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
     if (sample_type == stInteger) {
@@ -437,6 +439,8 @@ struct DFTTestData {
     int block_step;
     std::array<bool, 3> process;
     CUdevice device; // device_id
+    bool in_place;
+
     int warp_size;
 
     // most existing devices contain four schedulers per sm
@@ -606,10 +610,12 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         {
             std::lock_guard lock { d->lock };
 
+            CUdeviceptr d_buffer = d->in_place ? d->d_frequency.data : d->d_spatial.data;
+
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format->bytesPerSample;
             checkError(cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, padded_bytes, d->stream));
             {
-                void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height };
+                void * params[] { &d_buffer, &d->d_padded.data, &width, &height };
                 checkError(cuLaunchKernel(
                     d->im2col_kernel,
                     d->im2col_num_blocks, 1, 1,
@@ -621,7 +627,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             }
             checkError(cufftExecR2C(
                 rfft_handle,
-                (cufftReal *) d->d_spatial.data,
+                (cufftReal *) d_buffer,
                 (cufftComplex *) d->d_frequency.data
             ));
             {
@@ -642,10 +648,10 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             checkError(cufftExecC2R(
                 irfft_handle,
                 (cufftComplex *) d->d_frequency.data,
-                (cufftReal *) d->d_spatial.data
+                (cufftReal *) d_buffer
             ));
             {
-                void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height };
+                void * params[] { &d->d_padded.data, &d_buffer, &width, &height };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -785,6 +791,11 @@ static void VS_CC DFTTestCreate(
         d->process[plane] = true;
     }
 
+    d->in_place = !!(vsapi->propGetInt(in, "in_place", 0, &error));
+    if (error) {
+        d->in_place = false;
+    }
+
     int device_id = int64ToIntS(vsapi->propGetInt(in, "device_id", 0, &error));
     if (error) {
         device_id = 0;
@@ -805,7 +816,7 @@ static void VS_CC DFTTestCreate(
     auto compilation = compile(
         user_kernel,
         d->device,
-        d->radius, d->block_size, d->block_step,
+        d->radius, d->block_size, d->block_step, d->in_place,
         d->warp_size, d->warps_per_block,
         vi->format->sampleType, vi->format->bitsPerSample
     );
@@ -856,14 +867,16 @@ static void VS_CC DFTTestCreate(
     );
     checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
 
-    size_t spatial_bytes = (
-        calc_pad_num(vi->height, d->block_size, d->block_step) *
-        calc_pad_num(vi->width, d->block_size, d->block_step) *
-        (2 * d->radius + 1) *
-        square(d->block_size) *
-        sizeof(cufftReal)
-    );
-    checkError(cuMemAlloc(&d->d_spatial.data, spatial_bytes));
+    if (!d->in_place) {
+        size_t spatial_bytes = (
+            calc_pad_num(vi->height, d->block_size, d->block_step) *
+            calc_pad_num(vi->width, d->block_size, d->block_step) *
+            (2 * d->radius + 1) *
+            square(d->block_size) *
+            sizeof(cufftReal)
+        );
+        checkError(cuMemAlloc(&d->d_spatial.data, spatial_bytes));
+    }
 
     size_t frequency_bytes = (
         (2 * d->radius + 1) *
@@ -886,25 +899,21 @@ static void VS_CC DFTTestCreate(
         int is_spatial = d->radius == 0;
         int fft_rank = 3 - is_spatial;
         auto fft_n = &fft_size[is_spatial];
-        int fft_spatial_dist = (2 * d->radius + 1) * square(d->block_size);
-        int fft_frequency_dist = (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1);
 
-        checkError(cufftCreate(&d->rfft_handle.data));
         checkError(cufftPlanMany(
             &d->rfft_handle.data,
             fft_rank, fft_n,
-            nullptr, 1, fft_spatial_dist,
-            nullptr, 1, fft_frequency_dist,
+            nullptr, 1, 0,
+            nullptr, 1, 0,
             CUFFT_R2C, batch
         ));
         checkError(cufftSetStream(d->rfft_handle, d->stream));
 
-        checkError(cufftCreate(&d->irfft_handle.data));
         checkError(cufftPlanMany(
             &d->irfft_handle.data,
             fft_rank, fft_n,
-            nullptr, 1, fft_frequency_dist,
-            nullptr, 1, fft_spatial_dist,
+            nullptr, 1, 0,
+            nullptr, 1, 0,
             CUFFT_C2R, batch
         ));
         checkError(cufftSetStream(d->irfft_handle, d->stream));
@@ -915,22 +924,21 @@ static void VS_CC DFTTestCreate(
                 calc_pad_num(vi->width >> vi->format->subSamplingW, d->block_size, d->block_step)
             );
 
-            checkError(cufftCreate(&d->subsampled_rfft_handle.data));
             checkError(cufftPlanMany(
                 &d->subsampled_rfft_handle.data,
                 fft_rank, fft_n,
-                nullptr, 1, fft_spatial_dist,
-                nullptr, 1, fft_frequency_dist,
+                nullptr, 1, 0,
+                nullptr, 1, 0,
                 CUFFT_R2C, subsampled_batch
             ));
             checkError(cufftSetStream(d->subsampled_rfft_handle, d->stream));
 
-            checkError(cufftCreate(&d->subsampled_irfft_handle.data));
             checkError(cufftPlanMany(
                 &d->subsampled_irfft_handle.data,
                 fft_rank, fft_n,
-                nullptr, 1, fft_frequency_dist,
-                nullptr, 1, fft_spatial_dist, CUFFT_C2R, subsampled_batch
+                nullptr, 1, 0,
+                nullptr, 1, 0,
+                CUFFT_C2R, subsampled_batch
             ));
             checkError(cufftSetStream(d->subsampled_irfft_handle, d->stream));
         }
@@ -973,7 +981,7 @@ static void VS_CC RDFT(
         return set_error("\"shape\" must be an array of ints with 1, 2 or 3 values");
     }
 
-    std::array<int, 3> shape;
+    std::array<int, 3> shape {};
     {
         auto shape_array = vsapi->propGetIntArray(in, "shape", nullptr);
         for (int i = 0; i < ndim; i++) {
@@ -1015,11 +1023,7 @@ static void VS_CC RDFT(
     checkError(cuCtxPushCurrent(context));
     context_pushed = true;
 
-    Resource<CUstream, cuStreamDestroyCustom> stream {};
-    checkError(cuStreamCreate(&stream.data, CU_STREAM_NON_BLOCKING));
-
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial {};
-    checkError(cuMemAlloc(&d_spatial.data, size * sizeof(cufftDoubleReal)));
+    constexpr CUstream stream { 0 }; // uses the default stream
 
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency {};
     checkError(cuMemAlloc(&d_frequency.data, complex_size * sizeof(cufftDoubleComplex)));
@@ -1028,7 +1032,6 @@ static void VS_CC RDFT(
     checkError(cuMemHostAlloc((void **) &h_frequency.data, complex_size * sizeof(cufftDoubleComplex), 0));
 
     Resource<cufftHandle, cufftDestroyCustom, true> rfft_handle;
-    checkError(cufftCreate(&rfft_handle.data));
     checkError(cufftPlanMany(
         &rfft_handle.data,
         ndim, shape.data(),
@@ -1038,10 +1041,28 @@ static void VS_CC RDFT(
     ));
     checkError(cufftSetStream(rfft_handle, stream));
 
-    checkError(cuMemcpyHtoDAsync(d_spatial, data, size * sizeof(cufftDoubleReal), stream));
+    if (ndim == 1) {
+        checkError(cuMemcpyHtoD(d_frequency, data, size * sizeof(cufftDoubleReal)));
+    } else {
+        // pad for in-place real-to-complex transform
+        vs_bitblt(
+            h_frequency,
+            (shape[ndim - 1] / 2 + 1) * sizeof(cufftDoubleComplex),
+            data,
+            shape[ndim - 1] * sizeof(cufftDoubleReal),
+            shape[ndim - 1] * sizeof(cufftDoubleReal),
+            ndim == 2 ? shape[0] : shape[0] * shape[1]
+        );
+        checkError(cuMemcpyHtoDAsync(
+            d_frequency,
+            h_frequency,
+            complex_size * sizeof(cufftDoubleComplex),
+            stream
+        ));
+    }
     checkError(cufftExecD2Z(
         rfft_handle,
-        (cufftDoubleReal *) d_spatial.data,
+        (cufftDoubleReal *) d_frequency.data,
         (cufftDoubleComplex *) d_frequency.data
     ));
     checkError(cuMemcpyDtoHAsync(
@@ -1103,6 +1124,7 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "block_size:int:opt;"
         "block_step:int:opt;"
         "planes:int[]:opt;"
+        "in_place:int:opt;"
         "device_id:int:opt;",
         DFTTestCreate, nullptr, plugin
     );
