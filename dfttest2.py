@@ -16,7 +16,7 @@ class Backend:
     @dataclass(frozen=False)
     class cuFFT:
         device_id: int = 0
-        in_place: bool = False
+        in_place: bool = True
 
 
 def init_backend(backend: Backend.cuFFT) -> Backend.cuFFT:
