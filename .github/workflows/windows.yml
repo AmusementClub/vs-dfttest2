@@ -3,7 +3,9 @@ name: Build (Windows)
 on:
   push:
     paths:
+      - 'CMakeLists.txt'
       - 'cuda_source/*'
+      - 'nvrtc_source/*'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
     inputs:

@@ -3,7 +3,9 @@ name: Build (Linux)
 on:
   push:
     paths:
+      - 'CMakeLists.txt'
       - 'cuda_source/*'
+      - 'nvrtc_source/*'
       - '.github/workflows/linux.yml'
   workflow_dispatch:
 
