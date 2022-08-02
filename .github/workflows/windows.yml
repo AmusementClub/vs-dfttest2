@@ -51,11 +51,10 @@ jobs:
         mv vapoursynth-*/ vapoursynth/
 
     - name: Configure
-      shell: bash
       run: cmake -S . -B build -G Ninja -LA
         -D CMAKE_BUILD_TYPE=Release
         -D USE_NVRTC_STATIC=ON
-        -D VS_INCLUDE_DIR="$(pwd)\vapoursynth\include"
+        -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /arch:AVX /EHsc"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
         -D CMAKE_CUDA_ARCHITECTURES="50;61-real;75-real;86"
