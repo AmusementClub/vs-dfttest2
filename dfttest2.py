@@ -18,10 +18,19 @@ class Backend:
         device_id: int = 0
         in_place: bool = True
 
+    @dataclass(frozen=False)
+    class NVRTC:
+        device_id: int = 0
+        in_place: bool = False # reserved
 
-def init_backend(backend: Backend.cuFFT) -> Backend.cuFFT:
+backendT = typing.Union[Backend.cuFFT, Backend.NVRTC]
+
+
+def init_backend(backend: backendT) -> backendT:
     if backend is Backend.cuFFT: # type: ignore
         backend = Backend.cuFFT()
+    elif backend is Backend.NVRTC: # type: ignore
+        backend = Backend.NVRTC()
     return backend
 
 
@@ -212,7 +221,7 @@ def DFTTest2(
     f0beta: float = 1.0,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
-    backend: Backend.cuFFT = Backend.cuFFT()
+    backend: backendT = Backend.cuFFT()
 ) -> vs.VideoNode:
     """ this interface is not stable """
 
@@ -391,17 +400,30 @@ def DFTTest2(
         window=','.join(str(to_single(x)) for x in window),
     )
 
-    return core.dfttest2_cuda.DFTTest(
-        clip,
-        kernel=kernel,
-        block_size=block_size,
-        radius=radius,
-        block_step=block_step,
-        planes=planes,
-        in_place=backend.in_place,
-        device_id=backend.device_id
-    )
-
+    if isinstance(backend, Backend.cuFFT):
+        return core.dfttest2_cuda.DFTTest(
+            clip,
+            kernel=kernel,
+            block_size=block_size,
+            radius=radius,
+            block_step=block_step,
+            planes=planes,
+            in_place=backend.in_place,
+            device_id=backend.device_id
+        )
+    elif isinstance(backend, Backend.NVRTC):
+        return core.dfttest2_nvrtc.DFTTest(
+            clip,
+            kernel=kernel,
+            block_size=block_size,
+            radius=radius,
+            block_step=block_step,
+            planes=planes,
+            in_place=backend.in_place,
+            device_id=backend.device_id
+        )
+    else:
+        raise TypeError("unknown backend")
 
 def to_func(
     data: typing.Optional[typing.Sequence[float]],
@@ -454,7 +476,7 @@ def DFTTest(
     sst: typing.Optional[typing.Sequence[float]] = None,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
-    backend: Backend.cuFFT = Backend.cuFFT()
+    backend: backendT = Backend.cuFFT()
 ) -> vs.VideoNode:
 
     if (
