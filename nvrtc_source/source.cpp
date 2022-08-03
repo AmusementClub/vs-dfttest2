@@ -69,10 +69,6 @@ static void cuMemFreeCustom(CUdeviceptr p) {
     showError(cuMemFree(p));
 }
 
-static void cuMemFreeHostCustom(void * p) {
-    showError(cuMemFreeHost(p));
-}
-
 static void cuModuleUnloadCustom(CUmodule module) {
     showError(cuModuleUnload(module));
 }
@@ -326,6 +322,19 @@ static std::variant<CUmodule, std::string> compile(
         kernel_source << "#define SCALE 255.0\n";
     }
     kernel_source << user_kernel << '\n';
+    kernel_source << fft_header;
+    for (const auto & impl : rdft_implementations) {
+        kernel_source << impl;
+    }
+    for (const auto & impl : dft_implementations) {
+        kernel_source << impl;
+    }
+    for (const auto & impl : idft_implementations) {
+        kernel_source << impl;
+    }
+    for (const auto & impl : irdft_implementations) {
+        kernel_source << impl;
+    }
     kernel_source << kernel_implementation;
 
     nvrtcProgram program;
@@ -400,8 +409,7 @@ struct DFTTestData {
 
     int warp_size;
 
-    // most existing devices contain four schedulers per sm
-    int warps_per_block = 4;
+    int warps_per_block = 1;
 
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
@@ -409,21 +417,13 @@ struct DFTTestData {
     // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
 
-    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size/2+1)
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_frequency;
-
     std::mutex lock;
-
-    int rfft_grid_size;
-    int irfft_grid_size;
 
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_padded; // shape: (pad_height, pad_width)
 
     Resource<CUmodule, cuModuleUnloadCustom> module;
-    CUfunction filter_kernel;
-    int filter_num_blocks;
-    CUfunction im2col_kernel;
-    int im2col_num_blocks;
+    CUfunction fused_kernel;
+    int fused_num_blocks;
     CUfunction col2im_kernel;
 
     std::atomic<int> num_uninitialized_threads;
@@ -559,54 +559,21 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         {
             std::lock_guard lock { d->lock };
 
-            CUdeviceptr d_buffer = d->in_place ? d->d_frequency.data : d->d_spatial.data;
-
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format->bytesPerSample;
             checkError(cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, padded_bytes, d->stream));
             {
-                void * params[] { &d_buffer, &d->d_padded.data, &width, &height };
+                void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height };
                 checkError(cuLaunchKernel(
-                    d->im2col_kernel,
-                    d->im2col_num_blocks, 1, 1,
+                    d->fused_kernel,
+                    d->fused_num_blocks, 1, 1,
                     d->warps_per_block * d->warp_size, 1, 1,
                     0,
                     d->stream,
                     params, nullptr
                 ));
             }
-            int num_blocks = (
-                calc_pad_num(height, d->block_size, d->block_step) *
-                calc_pad_num(width, d->block_size, d->block_step)
-            );
-            if (!rfft(
-                (cuFloatComplex *) d->d_frequency.data,
-                (const float *) d_buffer,
-                d->radius, d->block_size,
-                d->rfft_grid_size, num_blocks, d->stream
-            )) {
-                return set_error("failed");
-            }
             {
-                void * params[] { &d->d_frequency.data, &num_blocks };
-                checkError(cuLaunchKernel(
-                    d->filter_kernel,
-                    d->filter_num_blocks, 1, 1,
-                    d->warps_per_block * d->warp_size, 1, 1,
-                    0,
-                    d->stream,
-                    params, nullptr
-                ));
-            }
-            if (!irfft(
-                (float *) d_buffer,
-                (const cuFloatComplex *) d->d_frequency.data,
-                d->radius, d->block_size,
-                d->rfft_grid_size, num_blocks, d->stream
-            )) {
-                return set_error("failed");
-            }
-            {
-                void * params[] { &d->d_padded.data, &d_buffer, &width, &height };
+                void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -789,40 +756,16 @@ static void VS_CC DFTTestCreate(
     int num_sms;
     checkError(cuDeviceGetAttribute(&num_sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, d->device));
 
-    if (auto grid_size = get_rfft_grid_size(d->radius, d->block_size, num_sms); grid_size == 0) {
-        return set_error("fails to get rfft grid size");
-    } else {
-        d->rfft_grid_size = grid_size;
-    }
-
-    if (auto grid_size = get_irfft_grid_size(d->radius, d->block_size, num_sms); grid_size == 0) {
-        return set_error("fails to get irfft grid size");
-    } else {
-        d->irfft_grid_size = grid_size;
-    }
-
-    checkError(cuModuleGetFunction(&d->filter_kernel, d->module, "frequency_filtering"));
+    checkError(cuModuleGetFunction(&d->fused_kernel, d->module, "fused"));
     {
         int max_blocks_per_sm;
         checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
             &max_blocks_per_sm,
-            d->filter_kernel,
+            d->fused_kernel,
             d->warps_per_block * d->warp_size,
             0
         ));
-        d->filter_num_blocks = num_sms * max_blocks_per_sm;
-    }
-
-    checkError(cuModuleGetFunction(&d->im2col_kernel, d->module, "im2col"));
-    {
-        int max_blocks_per_sm;
-        checkError(cuOccupancyMaxActiveBlocksPerMultiprocessor(
-            &max_blocks_per_sm,
-            d->im2col_kernel,
-            d->warps_per_block * d->warp_size,
-            0
-        ));
-        d->im2col_num_blocks = num_sms * max_blocks_per_sm;
+        d->fused_num_blocks = num_sms * max_blocks_per_sm;
     }
 
     checkError(cuModuleGetFunction(&d->col2im_kernel, d->module, "col2im"));
@@ -847,16 +790,6 @@ static void VS_CC DFTTestCreate(
         );
         checkError(cuMemAlloc(&d->d_spatial.data, spatial_bytes));
     }
-
-    size_t frequency_bytes = (
-        (2 * d->radius + 1) *
-        calc_pad_num(vi->height, d->block_size, d->block_step) *
-        calc_pad_num(vi->width, d->block_size, d->block_step) *
-        d->block_size *
-        (d->block_size / 2 + 1) *
-        sizeof(cuFloatComplex)
-    );
-    checkError(cuMemAlloc(&d->d_frequency.data, frequency_bytes));
 
     VSCoreInfo info;
     vsapi->getCoreInfo2(core, &info);
