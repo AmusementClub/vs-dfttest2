@@ -59,8 +59,6 @@ jobs:
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /arch:AVX /EHsc"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-        -D CMAKE_CUDA_ARCHITECTURES="50;61-real;75-real;86"
-        -D CMAKE_CUDA_FLAGS="--threads 0 --use_fast_math --resource-usage -Wno-deprecated-gpu-targets"
       env:
         CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
         CUDA_PATH_V11_7: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
