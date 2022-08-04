@@ -15,6 +15,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <variant>
+#include <vector>
 
 #include <VapourSynth.h>
 #include <VSHelper.h>
@@ -393,8 +394,40 @@ static std::variant<CUmodule, std::string> compile(
 }
 
 
+struct ticket_semaphore {
+    std::atomic<intptr_t> ticket {};
+    std::atomic<intptr_t> current {};
+
+    void acquire() noexcept {
+        intptr_t tk { ticket.fetch_add(1, std::memory_order::acquire) };
+        while (true) {
+            intptr_t curr { current.load(std::memory_order::acquire) };
+            if (tk <= curr) {
+                return;
+            }
+            current.wait(curr, std::memory_order::relaxed);
+        }
+    }
+
+    void release() noexcept {
+        current.fetch_add(1, std::memory_order::release);
+        current.notify_all();
+    }
+};
+
+
 struct DFTTestThreadData {
     uint8_t * h_padded; // shape: (pad_height, pad_width)
+};
+
+
+struct DFTTestStreamData {
+    Resource<CUstream, cuStreamDestroyCustom> stream;
+
+    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
+
+    Resource<CUdeviceptr, cuMemFreeCustom, true> d_padded; // shape: (pad_height, pad_width)
 };
 
 
@@ -411,15 +444,11 @@ struct DFTTestData {
 
     int warps_per_block = 1;
 
-    CUcontext context; // use primary stream for interoperability
-    Resource<CUstream, cuStreamDestroyCustom> stream;
-
-    // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
-
-    std::mutex lock;
-
-    Resource<CUdeviceptr, cuMemFreeCustom, true> d_padded; // shape: (pad_height, pad_width)
+    CUcontext context; // use primary context for interoperability
+    ticket_semaphore semaphore;
+    std::vector<DFTTestStreamData> stream_data;
+    std::vector<int> ticket;
+    std::mutex ticket_lock;
 
     Resource<CUmodule, cuModuleUnloadCustom> module;
     CUfunction fused_kernel;
@@ -557,23 +586,32 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         }
 
         {
-            std::lock_guard lock { d->lock };
+            d->semaphore.acquire();
+
+            int ticket;
+            {
+                std::lock_guard lock { d->ticket_lock };
+                ticket = d->ticket.back();
+                d->ticket.pop_back();
+            }
+
+            auto & stream_data = d->stream_data[ticket];
 
             int padded_bytes = (2 * d->radius + 1) * padded_size_spatial * vi->format->bytesPerSample;
-            checkError(cuMemcpyHtoDAsync(d->d_padded.data, thread_data.h_padded, padded_bytes, d->stream));
+            checkError(cuMemcpyHtoDAsync(stream_data.d_padded.data, thread_data.h_padded, padded_bytes, stream_data.stream));
             {
-                void * params[] { &d->d_spatial.data, &d->d_padded.data, &width, &height };
+                void * params[] { &stream_data.d_spatial.data, &stream_data.d_padded.data, &width, &height };
                 checkError(cuLaunchKernel(
                     d->fused_kernel,
                     d->fused_num_blocks, 1, 1,
                     d->warps_per_block * d->warp_size, 1, 1,
                     0,
-                    d->stream,
+                    stream_data.stream,
                     params, nullptr
                 ));
             }
             {
-                void * params[] { &d->d_padded.data, &d->d_spatial.data, &width, &height };
+                void * params[] { &stream_data.d_padded.data, &stream_data.d_spatial.data, &width, &height };
                 unsigned int vertical_size = calc_pad_size(height, d->block_size, d->block_step);
                 unsigned int horizontal_size = calc_pad_size(width, d->block_size, d->block_step);
                 unsigned int grid_x = (horizontal_size + d->warp_size - 1) / d->warp_size;
@@ -583,7 +621,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     grid_x, grid_y, 1,
                     d->warp_size, d->warps_per_block, 1,
                     0,
-                    d->stream,
+                    stream_data.stream,
                     params, nullptr
                 ));
             }
@@ -595,7 +633,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     .srcY = (pad_height - height) / 2,
                     .srcZ = (size_t) d->radius,
                     .srcMemoryType = CU_MEMORYTYPE_DEVICE,
-                    .srcDevice = d->d_padded.data,
+                    .srcDevice = stream_data.d_padded.data,
                     .srcPitch = pad_width * vi->format->bytesPerSample,
                     .srcHeight = pad_height,
                     .dstXInBytes = (pad_width - width) / 2 * vi->format->bytesPerSample,
@@ -609,10 +647,16 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                     .Height = (size_t) height,
                     .Depth = 1
                 };
-                checkError(cuMemcpy3DAsync(&config, d->stream));
+                checkError(cuMemcpy3DAsync(&config, stream_data.stream));
             }
 
-            checkError(cuStreamSynchronize(d->stream));
+            checkError(cuStreamSynchronize(stream_data.stream));
+
+            {
+                std::lock_guard lock { d->ticket_lock };
+                d->ticket.emplace_back(ticket);
+            }
+            d->semaphore.release();
         }
 
         int pad_width = calc_pad_size(width, d->block_size, d->block_step);
@@ -726,6 +770,16 @@ static void VS_CC DFTTestCreate(
         device_id = 0;
     }
 
+    int num_streams = int64ToIntS(vsapi->propGetInt(in, "num_streams", 0, &error));
+    if (error) {
+        num_streams = 1;
+    }
+    d->semaphore.current.store(num_streams - 1, std::memory_order::relaxed);
+    d->ticket.reserve(num_streams);
+    for (int i = 0; i < num_streams; i++) {
+        d->ticket.emplace_back(i);
+    }
+
     checkError(cuInit(0));
     checkError(cuDeviceGet(&d->device, device_id));
 
@@ -770,25 +824,30 @@ static void VS_CC DFTTestCreate(
 
     checkError(cuModuleGetFunction(&d->col2im_kernel, d->module, "col2im"));
 
-    checkError(cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING));
+    d->stream_data.resize(num_streams);
+    for (int i = 0; i < num_streams; i++) {
+        auto & stream_data = d->stream_data[i];
 
-    size_t padded_bytes = (
-        (2 * d->radius + 1) *
-        calc_pad_size(vi->height, d->block_size, d->block_step) *
-        calc_pad_size(vi->width, d->block_size, d->block_step) *
-        vi->format->bytesPerSample
-    );
-    checkError(cuMemAlloc(&d->d_padded.data, padded_bytes));
+        checkError(cuStreamCreate(&stream_data.stream.data, CU_STREAM_NON_BLOCKING));
 
-    if (!d->in_place) {
-        size_t spatial_bytes = (
-            calc_pad_num(vi->height, d->block_size, d->block_step) *
-            calc_pad_num(vi->width, d->block_size, d->block_step) *
+        size_t padded_bytes = (
             (2 * d->radius + 1) *
-            square(d->block_size) *
-            sizeof(float)
+            calc_pad_size(vi->height, d->block_size, d->block_step) *
+            calc_pad_size(vi->width, d->block_size, d->block_step) *
+            vi->format->bytesPerSample
         );
-        checkError(cuMemAlloc(&d->d_spatial.data, spatial_bytes));
+        checkError(cuMemAlloc(&stream_data.d_padded.data, padded_bytes));
+
+        if (!d->in_place) {
+            size_t spatial_bytes = (
+                calc_pad_num(vi->height, d->block_size, d->block_step) *
+                calc_pad_num(vi->width, d->block_size, d->block_step) *
+                (2 * d->radius + 1) *
+                square(d->block_size) *
+                sizeof(float)
+            );
+            checkError(cuMemAlloc(&stream_data.d_spatial.data, spatial_bytes));
+        }
     }
 
     VSCoreInfo info;
@@ -828,7 +887,8 @@ VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc
         "block_step:int:opt;"
         "planes:int[]:opt;"
         "in_place:int:opt;"
-        "device_id:int:opt;",
+        "device_id:int:opt;"
+        "num_streams:int:opt;",
         DFTTestCreate, nullptr, plugin
     );
 
