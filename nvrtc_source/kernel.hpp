@@ -1862,7 +1862,7 @@ void fused(
                 auto src = &srcp[(i * vertical_size + iy * block_step) * horizontal_size + ix * block_step];
                 auto local_thread_data = &thread_data[i * block_size];
                 for (int j = 0; j < block_size; j++) {
-                    ((float *) local_thread_data)[j] = to_float(src[j * horizontal_size + lane_id] * window[(i * block_size + j) * block_size + lane_id]);
+                    ((float *) local_thread_data)[j] = to_float(src[j * horizontal_size + lane_id]) * window[(i * block_size + j) * block_size + lane_id];
                 }
             }
 
@@ -1921,7 +1921,7 @@ void fused(
                 if (lane_id == 0) {
                     gf = thread_data[0].x / window_freq[0];
                 }
-                gf = __shfl_sync((1 << (block_size / 2)) - 1, gf, 0);
+                gf = __shfl_sync((1 << (block_size / 2 + 1)) - 1, gf, 0);
 #endif // ZERO_MEAN
                 for (int i = 0; i < 2 * radius + 1; i++) {
                     for (int j = 0; j < block_size; j++) {
