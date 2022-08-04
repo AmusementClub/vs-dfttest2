@@ -1858,9 +1858,11 @@ void fused(
             float2 thread_data[(2 * radius + 1) * block_size];
 
             // im2col
+            #pragma unroll
             for (int i = 0; i < 2 * radius + 1; i++) {
                 auto src = &srcp[(i * vertical_size + iy * block_step) * horizontal_size + ix * block_step];
                 auto local_thread_data = &thread_data[i * block_size];
+                #pragma unroll
                 for (int j = 0; j < block_size; j++) {
                     ((float *) local_thread_data)[j] = to_float(src[j * horizontal_size + lane_id]) * window[(i * block_size + j) * block_size + lane_id];
                 }
@@ -1923,7 +1925,9 @@ void fused(
                 }
                 gf = __shfl_sync((1 << (block_size / 2 + 1)) - 1, gf, 0);
 #endif // ZERO_MEAN
+                #pragma unroll
                 for (int i = 0; i < 2 * radius + 1; i++) {
+                    #pragma unroll
                     for (int j = 0; j < block_size; j++) {
                         float2 local_data = thread_data[i * block_size + j];
 
