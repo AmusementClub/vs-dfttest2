@@ -1,4 +1,4 @@
-__version__ = "0.0.1"
+__version__ = "0.1.1"
 
 from dataclasses import dataclass
 import math
@@ -21,7 +21,7 @@ class Backend:
     @dataclass(frozen=False)
     class NVRTC:
         device_id: int = 0
-        in_place: bool = False # reserved
+        num_streams: int = 1
 
 backendT = typing.Union[Backend.cuFFT, Backend.NVRTC]
 
@@ -419,8 +419,9 @@ def DFTTest2(
             radius=radius,
             block_step=block_step,
             planes=planes,
-            in_place=backend.in_place,
-            device_id=backend.device_id
+            in_place=False,
+            device_id=backend.device_id,
+            num_streams=backend.num_streams
         )
     else:
         raise TypeError("unknown backend")
