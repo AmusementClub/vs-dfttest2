@@ -310,20 +310,23 @@ def DFTTest2(
     pmin *= wscale
     pmax *= wscale
 
+    if isinstance(backend, Backend.cuFFT):
+        rdft, to_single = core.dfttest2_cuda.RDFT, core.dfttest2_cuda.ToSingle
+    elif isinstance(backend, Backend.NVRTC):
+        rdft, to_single = core.dfttest2_nvrtc.RDFT, core.dfttest2_nvrtc.ToSingle
+    else:
+        raise TypeError("unknown backend")
+
     if radius == 0:
-        window_freq = core.dfttest2_cuda.RDFT(
+        window_freq = rdft(
             data=[w * 255 for w in window],
-            shape=(block_size, block_size),
-            device_id=backend.device_id
+            shape=(block_size, block_size)
         )
     else:
-        window_freq = core.dfttest2_cuda.RDFT(
+        window_freq = rdft(
             data=[w * 255 for w in window],
-            shape=(2 * radius + 1, block_size, block_size),
-            device_id=backend.device_id
+            shape=(2 * radius + 1, block_size, block_size)
         )
-
-    to_single = core.dfttest2_cuda.ToSingle
 
     kernel = Template(
     """
@@ -425,6 +428,7 @@ def DFTTest2(
         )
     else:
         raise TypeError("unknown backend")
+
 
 def to_func(
     data: typing.Optional[typing.Sequence[float]],
