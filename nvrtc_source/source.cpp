@@ -92,6 +92,10 @@ static void cuStreamDestroyCustom(CUstream stream) {
     showError(cuStreamDestroy(stream));
 }
 
+static void cuEventDestroyCustom(CUevent event) {
+    showError(cuEventDestroy(event));
+}
+
 static void cuMemFreeCustom(CUdeviceptr p) {
     showError(cuMemFree(p));
 }
@@ -450,6 +454,8 @@ struct DFTTestThreadData {
 struct DFTTestStreamData {
     Resource<CUstream, cuStreamDestroyCustom> stream;
 
+    Resource<CUevent, cuEventDestroyCustom> event;
+
     // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
 
@@ -676,7 +682,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 checkError(cuMemcpy3DAsync(&config, stream_data.stream));
             }
 
-            checkError(cuStreamSynchronize(stream_data.stream));
+            checkError(cuEventRecord(stream_data.event, stream_data.stream));
+            checkError(cuEventSynchronize(stream_data.event));
 
             {
                 std::lock_guard lock { d->ticket_lock };
@@ -855,6 +862,11 @@ static void VS_CC DFTTestCreate(
         auto & stream_data = d->stream_data[i];
 
         checkError(cuStreamCreate(&stream_data.stream.data, CU_STREAM_NON_BLOCKING));
+
+        checkError(cuEventCreate(
+            &stream_data.event.data,
+            CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING
+        ));
 
         size_t padded_bytes = (
             (2 * d->radius + 1) *
