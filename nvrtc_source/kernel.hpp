@@ -186,43 +186,41 @@ void fused(
                 }
             }
 
+            // this is not a full 3d-irfft, because only a single slice is returned
+            auto local_thread_data = &thread_data[radius * block_size];
+
+            if (lane_id < block_size / 2 + 1) {
+                __syncwarp((1 << (block_size / 2 + 1)) - 1);
+                idft<block_size>((float *) local_thread_data);
+
+                // transpose store of complex data
+                #pragma unroll
+                for (int j = 0; j < block_size; j++) {
+                    transpose_buffer[j * transpose_stride + lane_id] = local_thread_data[j];
+                }
+            }
+
+            __syncwarp(active_mask);
             #pragma unroll
-            for (int i = 0; i < 2 * radius + 1; i++) {
-                auto local_thread_data = &thread_data[i * block_size];
+            for (int j = 0; j < block_size / 2 + 1; j++) {
+                // transpose load of complex data
+                local_thread_data[j].x = transpose_buffer[lane_id * transpose_stride + j].x;
+                local_thread_data[j].y = transpose_buffer[lane_id * transpose_stride + j].y;
+            }
 
-                if (lane_id < block_size / 2 + 1) {
-                    __syncwarp((1 << (block_size / 2 + 1)) - 1);
-                    idft<block_size>((float *) local_thread_data);
+            __syncwarp(active_mask);
+            irdft<block_size>((float *) local_thread_data);
 
-                    // transpose store of complex data
-                    #pragma unroll
-                    for (int j = 0; j < block_size; j++) {
-                        transpose_buffer[j * transpose_stride + lane_id] = local_thread_data[j];
-                    }
-                }
+            #pragma unroll
+            for (int j = 0; j < block_size; j++) {
+                ((float *) transpose_buffer)[j * transpose_stride + lane_id] = ((float *) local_thread_data)[j == 0 ? j : block_size - j];
+            }
 
-                __syncwarp(active_mask);
-                #pragma unroll
-                for (int j = 0; j < block_size / 2 + 1; j++) {
-                    // transpose load of complex data
-                    local_thread_data[j].x = transpose_buffer[lane_id * transpose_stride + j].x;
-                    local_thread_data[j].y = transpose_buffer[lane_id * transpose_stride + j].y;
-                }
-
-                __syncwarp(active_mask);
-                irdft<block_size>((float *) local_thread_data);
-
-                #pragma unroll
-                for (int j = 0; j < block_size; j++) {
-                    ((float *) transpose_buffer)[j * transpose_stride + lane_id] = ((float *) local_thread_data)[j == 0 ? j : block_size - j];
-                }
-
-                __syncwarp(active_mask);
-                auto local_dst = &dstp[(block_id * (2 * radius + 1) + i) * block_size * block_size];
-                #pragma unroll
-                for (int j = 0; j < block_size; j++) {
-                    local_dst[j * block_size + lane_id] = ((float *) transpose_buffer)[lane_id * transpose_stride + j];
-                }
+            __syncwarp(active_mask);
+            auto local_dst = &dstp[(block_id * (2 * radius + 1) + radius) * block_size * block_size];
+            #pragma unroll
+            for (int j = 0; j < block_size; j++) {
+                local_dst[j * block_size + lane_id] = ((float *) transpose_buffer)[lane_id * transpose_stride + j];
             }
         }
     }
