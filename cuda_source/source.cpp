@@ -129,6 +129,10 @@ static void cuStreamDestroyCustom(CUstream stream) {
     showError(cuStreamDestroy(stream));
 }
 
+static void cuEventDestroyCustom(CUevent event) {
+    showError(cuEventDestroy(event));
+}
+
 static void cuMemFreeCustom(CUdeviceptr p) {
     showError(cuMemFree(p));
 }
@@ -474,6 +478,8 @@ struct DFTTestData {
     CUcontext context; // use primary stream for interoperability
     Resource<CUstream, cuStreamDestroyCustom> stream;
 
+    Resource<CUevent, cuEventDestroyCustom> event;
+
     // shape: (vertical_num, horizontal_num, 2*radius+1, block_size, block_size)
     Resource<CUdeviceptr, cuMemFreeCustom, true> d_spatial;
 
@@ -715,7 +721,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
                 checkError(cuMemcpy3DAsync(&config, d->stream));
             }
 
-            checkError(cuStreamSynchronize(d->stream));
+            checkError(cuEventRecord(d->event, d->stream));
+            checkError(cuEventSynchronize(d->event));
         }
 
         int pad_width = calc_pad_size(width, d->block_size, d->block_step);
@@ -883,6 +890,11 @@ static void VS_CC DFTTestCreate(
     checkError(cuModuleGetFunction(&d->col2im_kernel, d->module, "col2im"));
 
     checkError(cuStreamCreate(&d->stream.data, CU_STREAM_NON_BLOCKING));
+
+    checkError(cuEventCreate(
+        &d->event.data,
+        CU_EVENT_BLOCKING_SYNC | CU_EVENT_DISABLE_TIMING
+    ));
 
     size_t padded_bytes = (
         (2 * d->radius + 1) *
@@ -1082,9 +1094,9 @@ static void VS_CC RDFT(
         for (int i = 0; i < shape[0]; i++) {
             for (int j = 0; j < shape[2] / 2 + 1; j++) {
                 dft(
-                    &output2[i * shape[1] * (shape[2] / 2 + 1) + j], 
-                    &output[i * shape[1] * (shape[2] / 2 + 1) + j], 
-                    shape[1], 
+                    &output2[i * shape[1] * (shape[2] / 2 + 1) + j],
+                    &output[i * shape[1] * (shape[2] / 2 + 1) + j],
+                    shape[1],
                     (shape[2] / 2 + 1)
                 );
             }
