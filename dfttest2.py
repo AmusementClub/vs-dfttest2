@@ -1,4 +1,4 @@
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 from dataclasses import dataclass
 import math
@@ -430,6 +430,21 @@ def DFTTest2(
         raise TypeError("unknown backend")
 
 
+def select_backend(
+    backend: typing.Optional[backendT],
+    sbsize: int,
+    tbsize: int
+) -> backendT:
+
+    if backend is not None:
+        return backend
+
+    if sbsize == 16 and tbsize in [1, 3, 5, 7]:
+        return Backend.NVRTC()
+    else:
+        return Backend.cuFFT()
+
+
 def to_func(
     data: typing.Optional[typing.Sequence[float]],
     norm: typing.Callable[[float], float],
@@ -481,7 +496,7 @@ def DFTTest(
     sst: typing.Optional[typing.Sequence[float]] = None,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
-    backend: backendT = Backend.cuFFT()
+    backend: typing.Optional[backendT] = None
 ) -> vs.VideoNode:
 
     if (
@@ -548,22 +563,22 @@ def DFTTest(
         _sigma = sigma
 
     return DFTTest2(
-        clip=clip,
-        ftype=ftype,
-        sigma=_sigma,
-        sigma2=sigma2,
-        pmin=pmin,
-        pmax=pmax,
-        sbsize=sbsize,
-        sosize=sosize,
-        tbsize=tbsize,
-        swin=swin,
-        twin=twin,
-        sbeta=sbeta,
-        tbeta=tbeta,
-        zmean=zmean,
-        f0beta=f0beta,
-        ssystem=ssystem,
-        planes=planes,
-        backend=backend
+        clip = clip,
+        ftype = ftype,
+        sigma = _sigma,
+        sigma2 = sigma2,
+        pmin = pmin,
+        pmax = pmax,
+        sbsize = sbsize,
+        sosize = sosize,
+        tbsize = tbsize,
+        swin = swin,
+        twin = twin,
+        sbeta = sbeta,
+        tbeta = tbeta,
+        zmean = zmean,
+        f0beta = f0beta,
+        ssystem = ssystem,
+        planes = planes,
+        backend = select_backend(backend, sbsize, tbsize)
     )
