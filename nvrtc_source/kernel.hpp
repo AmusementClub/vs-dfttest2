@@ -186,7 +186,7 @@ void fused(
                 }
             }
 
-            // this is not a full 3d-irfft, because only a single slice is returned
+            // this is not a full 3d irdft, because only a single slice is required
             auto local_thread_data = &thread_data[radius * block_size];
 
             if (lane_id < block_size / 2 + 1) {
