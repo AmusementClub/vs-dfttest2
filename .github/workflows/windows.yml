@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'CMakeLists.txt'
+      - 'cpu_source/*'
       - 'cuda_source/*'
       - 'nvrtc_source/*'
       - '.github/workflows/windows.yml'
