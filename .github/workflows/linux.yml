@@ -42,10 +42,19 @@ jobs:
         unzip -q vs.zip
         mv vapoursynth*/ vapoursynth
 
+    - name: Download Vector Class Library
+      run: |
+        wget -q -O vcl.zip https://github.com/vectorclass/version2/archive/refs/tags/v2.01.04.zip
+        unzip -q vcl.zip
+        mv version2*/ vectorclass
+
     - name: Configure
       run: cmake -S . -B build -G Ninja
-        -D USE_NVRTC_STATIC=ON
         -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
+        -D ENABLE_CUDA=ON
+        -D USE_NVRTC_STATIC=ON
+        -D ENABLE_CPU=ON
+        -D VCL_HOME="`pwd`/vectorclass"
         -D CMAKE_BUILD_TYPE=Release
         -D CMAKE_CXX_FLAGS_RELEASE="-ffast-math -march=x86-64-v3"
 
@@ -58,5 +67,5 @@ jobs:
     - name: Upload
       uses: actions/upload-artifact@v2
       with:
-        name: vs-dfttest2-cuda-Linux
+        name: vs-dfttest2-Linux
         path: artifact
