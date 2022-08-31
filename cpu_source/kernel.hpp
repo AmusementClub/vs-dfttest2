@@ -1,8 +1,6 @@
 #ifndef KERNEL_HPP
 #define KERNEL_HPP
 
-#include <memory>
-
 #include <vectorclass.h>
 #include <vectormath_exp.h>
 
@@ -1793,7 +1791,7 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
             }
         }
 
-        #pragma GCC unroll 2
+        #pragma GCC unroll 4
         for (int j = 0; j < 4; j++) {
             auto id1 = (i * 8 + j) * stride;
             auto id2 = (i * 8 + 4 + j) * stride;
@@ -1804,7 +1802,7 @@ static inline void transpose_16x16(Vec16f block[/* 16 */]) {
         }
     }
 
-    #pragma GCC unroll 2
+    #pragma GCC unroll 8
     for (int i = 0; i < 8; i++) {
         Vec16f temp1 = reinterpret_f(blend8<0, 1, 2, 3, 8, 9, 10, 11>(Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])));
         Vec16f temp2 = reinterpret_f(blend8<4, 5, 6, 7, 12, 13, 14, 15>(Vec8d(reinterpret_d(block[i * stride])), reinterpret_d(block[(i + 8) * stride])));
