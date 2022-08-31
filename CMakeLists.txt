@@ -2,61 +2,80 @@ cmake_minimum_required(VERSION 3.22.0)
 
 project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX)
 
-set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
+set(ENABLE_CUDA ON CACHE BOOL "Whether to compile with CUDA backends")
+set(ENABLE_CPU ON CACHE BOOL "Whether to compile with x86 backends")
 
-find_package(CUDAToolkit REQUIRED)
+if(ENABLE_CUDA)
+    set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
-add_library(dfttest2_cuda SHARED
-    cuda_source/source.cpp
-    cuda_source/win32.cpp
-)
-add_library(dfttest2_nvrtc SHARED
-    nvrtc_source/source.cpp
-)
+    find_package(CUDAToolkit REQUIRED)
 
-set_target_properties(dfttest2_cuda PROPERTIES
-    CXX_EXTENSIONS OFF
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-set_target_properties(dfttest2_nvrtc PROPERTIES
-    CXX_EXTENSIONS OFF
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
+    add_library(dfttest2_cuda SHARED
+        cuda_source/source.cpp
+        cuda_source/win32.cpp
+    )
+    add_library(dfttest2_nvrtc SHARED
+        nvrtc_source/source.cpp
+    )
 
-target_link_libraries(dfttest2_cuda PRIVATE CUDA::cuda_driver CUDA::cufft)
-target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::cuda_driver)
+    set_target_properties(dfttest2_cuda PROPERTIES
+        CXX_EXTENSIONS OFF
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+    set_target_properties(dfttest2_nvrtc PROPERTIES
+        CXX_EXTENSIONS OFF
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
 
-if(
-    USE_NVRTC_STATIC AND (
-        CUDAToolkit_VERSION_MAJOR GREATER_EQUAL "12" OR (
-            CUDAToolkit_VERSION_MAJOR EQUAL "11" AND
-            CUDAToolkit_VERSION_MINOR GREATER_EQUAL "5"
+    target_link_libraries(dfttest2_cuda PRIVATE CUDA::cuda_driver CUDA::cufft)
+    target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::cuda_driver)
+
+    if(
+        USE_NVRTC_STATIC AND (
+            CUDAToolkit_VERSION_MAJOR GREATER_EQUAL "12" OR (
+                CUDAToolkit_VERSION_MAJOR EQUAL "11" AND
+                CUDAToolkit_VERSION_MINOR GREATER_EQUAL "5"
+            )
         )
     )
-)
-    target_link_directories(dfttest2_cuda PRIVATE "${CUDAToolkit_LIBRARY_DIR}")
-    target_link_libraries(dfttest2_cuda PRIVATE nvrtc_static nvrtc-builtins_static nvptxcompiler_static)
-    target_link_directories(dfttest2_nvrtc PRIVATE "${CUDAToolkit_LIBRARY_DIR}")
-    target_link_libraries(dfttest2_nvrtc PRIVATE nvrtc_static nvrtc-builtins_static nvptxcompiler_static)
+        target_link_directories(dfttest2_cuda PRIVATE "${CUDAToolkit_LIBRARY_DIR}")
+        target_link_libraries(dfttest2_cuda PRIVATE nvrtc_static nvrtc-builtins_static nvptxcompiler_static)
+        target_link_directories(dfttest2_nvrtc PRIVATE "${CUDAToolkit_LIBRARY_DIR}")
+        target_link_libraries(dfttest2_nvrtc PRIVATE nvrtc_static nvrtc-builtins_static nvptxcompiler_static)
 
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-        set_property(TARGET dfttest2_cuda PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
-        set_property(TARGET dfttest2_nvrtc PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
-    endif()
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+            set_property(TARGET dfttest2_cuda PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+            set_property(TARGET dfttest2_nvrtc PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+        endif()
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        target_link_libraries(dfttest2_cuda PRIVATE Ws2_32)
-        target_link_libraries(dfttest2_nvrtc PRIVATE Ws2_32)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+            target_link_libraries(dfttest2_cuda PRIVATE Ws2_32)
+            target_link_libraries(dfttest2_nvrtc PRIVATE Ws2_32)
+        endif()
+    else()
+        if(USE_NVRTC_STATIC)
+            message(WARNING "NVRTC static library is not used")
+        endif()
+        target_link_libraries(dfttest2_cuda PRIVATE CUDA::nvrtc)
+        target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::nvrtc)
     endif()
-else()
-    if(USE_NVRTC_STATIC)
-        message(WARNING "NVRTC static library is not used")
-    endif()
-    target_link_libraries(dfttest2_cuda PRIVATE CUDA::nvrtc)
-    target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::nvrtc)
-endif()
+endif() # ENABLE_CUDA
+
+if(ENABLE_CPU)
+    set(VCL_HOME "" CACHE PATH "Path to vector class v2 headers")
+
+    add_library(dfttest2_avx2 SHARED cpu_source/source.cpp)
+
+    target_include_directories(dfttest2_avx2 PRIVATE ${VCL_HOME})
+
+    set_target_properties(dfttest2_avx2 PROPERTIES
+        CXX_EXTENSIONS OFF
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+endif() # ENABLE_CPU
 
 find_package(PkgConfig QUIET MODULE)
 
@@ -67,11 +86,19 @@ if(PKG_CONFIG_FOUND)
         message(STATUS "Found VapourSynth r${VS_VERSION}")
 
         cmake_path(APPEND install_dir ${VS_LIBDIR} vapoursynth)
-        target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIRS})
-        target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIRS})
 
-        install(TARGETS dfttest2_cuda LIBRARY DESTINATION ${install_dir})
-        install(TARGETS dfttest2_nvrtc LIBRARY DESTINATION ${install_dir})
+        if(ENABLE_CUDA)
+            target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIRS})
+            target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIRS})
+
+            install(TARGETS dfttest2_cuda LIBRARY DESTINATION ${install_dir})
+            install(TARGETS dfttest2_nvrtc LIBRARY DESTINATION ${install_dir})
+        endif() # ENABLE_CUDA
+
+        if(ENABLE_CPU)
+            target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIRS})
+            install(TARGETS dfttest2_avx2 LIBRARY DESTINATION ${install_dir})
+        endif()
     endif()
 endif()
 
@@ -82,11 +109,18 @@ if(NOT VS_FOUND)
         message(WARNING "VapourSynth not found")
     endif()
 
-    target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIR})
-    target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIR})
+    if(ENABLE_CUDA)
+        target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIR})
+        target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIR})
 
-    install(TARGETS dfttest2_cuda LIBRARY RUNTIME)
-    install(TARGETS dfttest2_nvrtc LIBRARY RUNTIME)
+        install(TARGETS dfttest2_cuda LIBRARY RUNTIME)
+        install(TARGETS dfttest2_nvrtc LIBRARY RUNTIME)
+    endif() # ENABLE_CUDA
+
+    if(ENABLE_CPU)
+        target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIR})
+        install(TARGETS dfttest2_avx2 LIBRARY RUNTIME)
+    endif() # ENABLE_CPU
 endif()
 
 find_package(Git QUIET)
@@ -111,9 +145,15 @@ endif()
 
 configure_file(common/config.h.in config.h)
 
-target_include_directories(dfttest2_cuda PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_include_directories(dfttest2_nvrtc PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+if(ENABLE_CUDA)
+    target_include_directories(dfttest2_cuda PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(dfttest2_nvrtc PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-if (WIN32)
-    target_link_options(dfttest2_cuda PRIVATE "/DELAYLOAD:cufft64_10.dll" "delayimp.lib")
-endif()
+    if (WIN32)
+        target_link_options(dfttest2_cuda PRIVATE "/DELAYLOAD:cufft64_10.dll" "delayimp.lib")
+    endif()
+endif() # ENABLE_CUDA
+
+if(ENABLE_CPU)
+    target_include_directories(dfttest2_avx2 PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+endif() # ENABLE_CPU
