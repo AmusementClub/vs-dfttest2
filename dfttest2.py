@@ -1,4 +1,4 @@
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from dataclasses import dataclass
 import math
@@ -23,7 +23,10 @@ class Backend:
         device_id: int = 0
         num_streams: int = 1
 
-backendT = typing.Union[Backend.cuFFT, Backend.NVRTC]
+    class CPU:
+        pass
+
+backendT = typing.Union[Backend.cuFFT, Backend.NVRTC, Backend.CPU]
 
 
 def init_backend(backend: backendT) -> backendT:
@@ -311,9 +314,11 @@ def DFTTest2(
     pmax *= wscale
 
     if isinstance(backend, Backend.cuFFT):
-        rdft, to_single = core.dfttest2_cuda.RDFT, core.dfttest2_cuda.ToSingle
+        rdft = core.dfttest2_cuda.RDFT
     elif isinstance(backend, Backend.NVRTC):
-        rdft, to_single = core.dfttest2_nvrtc.RDFT, core.dfttest2_nvrtc.ToSingle
+        rdft = core.dfttest2_nvrtc.RDFT
+    elif isinstance(backend, Backend.CPU):
+        rdft = core.dfttest2_avx2.RDFT
     else:
         raise TypeError("unknown backend")
 
@@ -327,6 +332,29 @@ def DFTTest2(
             data=[w * 255 for w in window],
             shape=(2 * radius + 1, block_size, block_size)
         )
+
+    if isinstance(backend, Backend.CPU):
+        return core.dfttest2_avx2.DFTTest(
+            clip,
+            window=window,
+            sigma=[sigma_scalar] * (2 * radius + 1) * block_size * (block_size // 2 + 1) if sigma_is_scalar else sigma_array,
+            sigma2=sigma2,
+            pmin=pmin,
+            pmax=pmax,
+            radius=radius,
+            block_size=block_size,
+            block_step=block_step,
+            planes=planes,
+            filter_type=filter_type,
+            window_freq=window_freq
+        )
+
+    if isinstance(backend, Backend.cuFFT):
+        to_single = core.dfttest2_cuda.ToSingle
+    elif isinstance(backend, Backend.NVRTC):
+        to_single = core.dfttest2_nvrtc.ToSingle
+    else:
+        raise TypeError("unknown backend")
 
     kernel = Template(
     """
@@ -407,8 +435,8 @@ def DFTTest2(
         return core.dfttest2_cuda.DFTTest(
             clip,
             kernel=kernel,
-            block_size=block_size,
             radius=radius,
+            block_size=block_size,
             block_step=block_step,
             planes=planes,
             in_place=backend.in_place,
@@ -418,8 +446,8 @@ def DFTTest2(
         return core.dfttest2_nvrtc.DFTTest(
             clip,
             kernel=kernel,
-            block_size=block_size,
             radius=radius,
+            block_size=block_size,
             block_step=block_step,
             planes=planes,
             in_place=False,
