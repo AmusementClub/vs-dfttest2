@@ -23,6 +23,7 @@ class Backend:
         device_id: int = 0
         num_streams: int = 1
 
+    @dataclass(frozen=False)
     class CPU:
         pass
 
@@ -34,6 +35,8 @@ def init_backend(backend: backendT) -> backendT:
         backend = Backend.cuFFT()
     elif backend is Backend.NVRTC: # type: ignore
         backend = Backend.NVRTC()
+    elif backend is Backend.CPU:
+        backend = Backend.CPU()
     return backend
 
 
