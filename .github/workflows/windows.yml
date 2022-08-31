@@ -52,10 +52,12 @@ jobs:
         unzip -q vs.zip
         mv vapoursynth-*/ vapoursynth/
 
-    - name: Configure
-      run: cmake -S . -B build -G Ninja -LA
+    - name: Configure (CUDA)
+      run: cmake -S . -B build_cuda -G Ninja -LA
         -D CMAKE_BUILD_TYPE=Release
+        -D ENABLE_CUDA=ON
         -D USE_NVRTC_STATIC=ON
+        -D ENABLE_CPU=OFF
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /arch:AVX /EHsc"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
@@ -63,24 +65,24 @@ jobs:
         CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
         CUDA_PATH_V11_7: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
 
-    - name: Build
-      run: cmake --build build --verbose
+    - name: Build (CUDA)
+      run: cmake --build build_cuda --verbose
 
-    - name: Install
-      run: cmake --install build --prefix install
+    - name: Install (CUDA)
+      run: cmake --install build_cuda --prefix install_cuda
 
-    - name: Prepare for upload
+    - name: Prepare for upload (CUDA)
       run: |
-        mkdir artifact
-        copy install\bin\*.dll artifact
+        mkdir artifact_cuda
+        copy install_cuda\bin\*.dll artifact_cuda
         mkdir cufft
         copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin\cufft64_*.dll" cufft
 
-    - name: Upload
+    - name: Upload (CUDA)
       uses: actions/upload-artifact@v2
       with:
         name: vs-dfttest2-cuda-windows
-        path: artifact
+        path: artifact_cuda
 
     - name: Upload cufft
       uses: actions/upload-artifact@v2
@@ -89,10 +91,44 @@ jobs:
         name: cufft-windows
         path: cufft
 
+    - name: Download Vector Class Library
+      run: |
+        curl -s -o vcl.zip -L https://github.com/vectorclass/version2/archive/refs/tags/v2.01.04.zip
+        unzip -q vcl.zip
+        mv version2*/ vectorclass
+
+    - name: Configure (CPU)
+      run: cmake -S . -B build_cpu -G Ninja -LA
+        -D CMAKE_BUILD_TYPE=Release
+        -D ENABLE_CUDA=OFF
+        -D ENABLE_CPU=ON
+        -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
+        -D VCL_HOME="$(pwd)/vectorclass"
+        -D CMAKE_CXX_COMPILER=clang++
+        -D CMAKE_CXX_FLAGS="-ffast-math -march=x86-64-v3"
+        -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+    - name: Build (CPU)
+      run: cmake --build build_cpu --verbose
+
+    - name: Install (CPU)
+      run: cmake --install build_cpu --prefix install_cpu
+
+    - name: Prepare for upload (CPU)
+      run: |
+        mkdir artifact_cpu
+        copy install_cpu\bin\*.dll artifact_cpu
+
+    - name: Upload (CPU)
+      uses: actions/upload-artifact@v2
+      with:
+        name: vs-dfttest2-cpu-windows
+        path: artifact_cpu
+
     - name: Compress artifact for release
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
       run: |
-        cd artifact
+        cd artifact_cuda
 
         mkdir vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}
         xcopy dfttest2_cuda.dll vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }} /f
@@ -104,6 +140,12 @@ jobs:
         mkdir vsmlrt-cuda
         xcopy cufft64_*.dll vsmlrt-cuda /f
         7z a -t7z -mx=9 ../cufft-windows-${{ github.event.inputs.tag }}.7z vsmlrt-cuda
+        
+        cd ../artifact_cpu
+
+        mkdir vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}
+        xcopy dfttest2_avx2.dll vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }} /f
+        7z a -t7z -mx=9 ../vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}.7z vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}
 
     - name: Release
       uses: softprops/action-gh-release@v1
@@ -112,6 +154,7 @@ jobs:
         tag_name: ${{ github.event.inputs.tag }}
         files: |
           vs-dfttest2-cuda-windows-${{ github.event.inputs.tag }}.7z
+          vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}.7z
           cufft-windows-${{ github.event.inputs.tag }}.7z
           dfttest2.py
         fail_on_unmatched_files: true
