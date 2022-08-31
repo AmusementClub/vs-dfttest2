@@ -1,5 +1,5 @@
 # vs-dfttest2
-DFTTest re-implemetation (CUDA only, other backends in the future)
+DFTTest re-implemetation (CUDA and x86)
 
 ## Usage
 ```python3
