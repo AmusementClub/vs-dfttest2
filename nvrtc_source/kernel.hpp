@@ -38,8 +38,8 @@ __device__
 static TYPE from_float(float x) {
 #ifdef PEAK
     x /= static_cast<float>(SCALE);
-    x = fmaxf(0.0f, fminf(x, static_cast<float>(PEAK)));
-    return static_cast<TYPE>(__float2int_rz(x + 0.5f));
+    x = fmaxf(0.0f, fminf(x + 0.5f, static_cast<float>(PEAK)));
+    return static_cast<TYPE>(__float2int_rz(x));
 #else // PEAK // only integral types define it
     return static_cast<TYPE>(x / static_cast<float>(SCALE));
 #endif // PEAK
