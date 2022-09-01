@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -144,9 +145,134 @@ static void reflection_padding(
     }
 }
 
+static void load_block(
+    Vec16f * VS_RESTRICT block,
+    const uint8_t * VS_RESTRICT shifted_src,
+    int radius,
+    int block_size,
+    int block_step,
+    int width,
+    int height,
+    const Vec16f * VS_RESTRICT window,
+    int bits_per_sample
+) {
+
+    float scale = 1.0f / (1 << (bits_per_sample - 8));
+    if (bits_per_sample == 32) {
+        scale = 255.0f;
+    }
+
+    int bytes_per_sample = (bits_per_sample + 7) / 8;
+
+    assert(block_size == 16);
+    block_size = 16; // unsafe
+
+    int offset_x = calc_pad_size(width, block_size, block_step);
+    int offset_y = calc_pad_size(height, block_size, block_step);
+
+    if (bytes_per_sample == 1) {
+        for (int i = 0; i < 2 * radius + 1; i++) {
+            for (int j = 0; j < block_size; j++) {
+                auto vec_input = Vec16uc().load((const uint8_t *) shifted_src + (i * offset_y + j) * offset_x);
+                auto vec_input_f = to_float(Vec16i(extend(extend(vec_input))));
+                block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
+            }
+        }
+    }
+    if (bytes_per_sample == 2) {
+        for (int i = 0; i < 2 * radius + 1; i++) {
+            for (int j = 0; j < block_size; j++) {
+                auto vec_input = Vec16us().load((const uint16_t *) shifted_src + (i * offset_y + j) * offset_x);
+                auto vec_input_f = to_float(Vec16i(extend(vec_input)));
+                block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
+            }
+        }
+    }
+    if (bytes_per_sample == 4) {
+        for (int i = 0; i < 2 * radius + 1; i++) {
+            for (int j = 0; j < block_size; j++) {
+                auto vec_input_f = Vec16f().load((const float *) shifted_src + (i * offset_y + j) * offset_x);
+                block[i * block_size * 2 + j] = scale * window[i * block_size + j] * vec_input_f;
+            }
+        }
+    }
+
+    for (int i = 0; i < 2 * radius + 1; i++) {
+        for (int j = block_size; j < block_size * 2; j++) {
+            block[i * block_size * 2 + j] = 0.0f;
+        }
+    }
+}
+
+static void store_block(
+    float * VS_RESTRICT shifted_dst,
+    const Vec16f * VS_RESTRICT shifted_block,
+    int block_size,
+    int block_step,
+    int width,
+    int height,
+    const Vec16f * VS_RESTRICT shifted_window
+) {
+
+    assert(block_size == 16);
+    block_size = 16; // unsafe
+
+    for (int i = 0; i < block_size; i++) {
+        Vec16f acc = Vec16f().load((const float *) shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
+        acc = mul_add(shifted_block[i], shifted_window[i], acc);
+        acc.store((float *) shifted_dst + (i * calc_pad_size(width, block_size, block_step)));
+    }
+}
+
+static void store_frame(
+    uint8_t * VS_RESTRICT dst,
+    const float * VS_RESTRICT shifted_src,
+    int width,
+    int height,
+    int dst_stride,
+    int src_stride,
+    int bits_per_sample
+) {
+
+    float scale = 1.0f / (1 << (bits_per_sample - 8));
+    if (bits_per_sample == 32) {
+        scale = 255.0f;
+    }
+
+    int bytes_per_sample = (bits_per_sample + 7) / 8;
+    int peak = (1 << bits_per_sample) - 1;
+
+    if (bytes_per_sample == 1) {
+        auto dstp = (uint8_t *) dst;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                auto clamped = std::clamp(static_cast<int>(shifted_src[y * src_stride + x] / scale + 0.5f), 0, peak);
+                dstp[y * dst_stride + x] = static_cast<uint8_t>(clamped);
+            }
+        }
+    }
+    if (bytes_per_sample == 2) {
+        auto dstp = (uint16_t *) dst;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                auto clamped = std::clamp(static_cast<int>(shifted_src[y * src_stride + x] / scale + 0.5f), 0, peak);
+                dstp[y * dst_stride + x] = static_cast<uint16_t>(clamped);
+            }
+        }
+    }
+    if (bytes_per_sample == 4) {
+        auto dstp = (float *) dst;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                dstp[y * dst_stride + x] = shifted_src[y * src_stride + x] / scale;
+            }
+        }
+    }
+}
+
 struct DFTTestThreadData {
     uint8_t * padded; // shape: (pad_height, pad_width)
-    uint8_t * padded2; // shape: (pad_height, pad_width)
+    float * padded2; // shape: (pad_height, pad_width)
 };
 
 struct DFTTestData {
@@ -228,10 +354,10 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             );
 
             thread_data.padded = static_cast<uint8_t *>(std::malloc(padded_size));
-            thread_data.padded2 = static_cast<uint8_t *>(std::malloc(
+            thread_data.padded2 = static_cast<float *>(std::malloc(
                 calc_pad_size(vi->height, d->block_size, d->block_step) *
                 calc_pad_size(vi->width, d->block_size, d->block_step) *
-                vi->format->bytesPerSample
+                sizeof(float)
             ));
 
             {
@@ -283,7 +409,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         std::memset(thread_data.padded2, 0,
             calc_pad_size(height, d->block_size, d->block_step) *
             calc_pad_size(width, d->block_size, d->block_step) *
-            vi->format->bytesPerSample
+            sizeof(float)
         );
 
         for (int i = 0; i < 2 * d->radius + 1; i++) {
@@ -299,28 +425,42 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
 
         for (int i = 0; i < calc_pad_num(height, d->block_size, d->block_step); i++) {
             for (int j = 0; j < calc_pad_num(width, d->block_size, d->block_step); j++) {
+                assert(d->block_size == 16);
                 constexpr int block_size = 16;
+
                 Vec16f block[7 * block_size * 2];
-                for (int k = 0; k < 2 * d->radius + 1; k++) {
-                    for (int l = 0; l < block_size; l++) {
-                        block[k * block_size * 2 + l] = Vec16f().load(reinterpret_cast<const float *>(&thread_data.padded[(
-                            (k * padded_size_spatial + (i * d->block_step + l) * calc_pad_size(width, d->block_size, d->block_step) + j * d->block_step) * sizeof(float)
-                        )])) * d->window[k * block_size + l] * 255.0;
-                    }
-                    for (int l = block_size; l < block_size * 2; l++) {
-                        block[k * block_size * 2 + l] = 0.0f;
-                    }
-                }
-                fused(block, d->sigma.get(), d->sigma2, d->pmin, d->pmax, d->filter_type, d->zero_mean, d->window_freq.get(), d->radius);
-                for (int l = 0; l < block_size; l++) {
-                    Vec16f acc = Vec16f().load(reinterpret_cast<const float *>(&thread_data.padded2[(
-                        ((i * d->block_step + l) * calc_pad_size(width, d->block_size, d->block_step) + j * d->block_step) * sizeof(float)
-                    )]));
-                    acc = mul_add(block[d->radius * block_size * 2 + l] / 255.0, d->window[d->radius * block_size * 2 + l], acc);
-                    acc.store(reinterpret_cast<float *>(&thread_data.padded2[(
-                        ((i * d->block_step + l) * calc_pad_size(width, d->block_size, d->block_step) + j * d->block_step) * sizeof(float)
-                    )]));
-                }
+
+                int offset_x = calc_pad_size(width, d->block_size, d->block_step);
+
+                load_block(
+                    block,
+                    &thread_data.padded[(i * offset_x + j) * d->block_step * vi->format->bytesPerSample],
+                    d->radius, d->block_size, d->block_step,
+                    width, height,
+                    d->window.get(), vi->format->bitsPerSample
+                );
+
+                fused(
+                    block,
+                    d->sigma.get(),
+                    d->sigma2,
+                    d->pmin,
+                    d->pmax,
+                    d->filter_type,
+                    d->zero_mean,
+                    d->window_freq.get(),
+                    d->radius
+                );
+
+                store_block(
+                    &thread_data.padded2[(i * offset_x + j) * d->block_step],
+                    &block[d->radius * block_size * 2],
+                    block_size,
+                    d->block_step,
+                    width,
+                    height,
+                    &d->window[d->radius * block_size * 2]
+                );
             }
         }
 
@@ -330,11 +470,14 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         int offset_x = (pad_width - width) / 2;
 
         auto dstp = vsapi->getWritePtr(dst_frame.get(), plane);
-        auto input = &thread_data.padded2[(offset_y * pad_width + offset_x) * vi->format->bytesPerSample];
-        vs_bitblt(
-            dstp, stride * vi->format->bytesPerSample,
-            input, pad_width * vi->format->bytesPerSample,
-            width * vi->format->bytesPerSample, height
+        store_frame(
+            dstp,
+            &thread_data.padded2[(offset_y * pad_width + offset_x)],
+            width,
+            height,
+            stride,
+            pad_width,
+            vi->format->bitsPerSample
         );
     }
 
@@ -373,8 +516,14 @@ static void VS_CC DFTTestCreate(
     };
 
     auto vi = vsapi->getVideoInfo(d->node);
-    if (vi->format->sampleType != stFloat || vi->format->bitsPerSample != 32) {
-        return set_error("only 32-bit float format is supported");
+    if (!isConstantFormat(vi)) {
+        return set_error("only constant format input is supported");
+    }
+    if (vi->format->sampleType == stInteger && vi->format->bytesPerSample > 2) {
+        return set_error("only 8-16 bit integer format input is supported");
+    }
+    if (vi->format->sampleType == stFloat && vi->format->bitsPerSample != 32) {
+        return set_error("only 32-bit float format input is supported");
     }
 
     int error;
