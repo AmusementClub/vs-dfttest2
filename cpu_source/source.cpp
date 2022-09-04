@@ -196,12 +196,6 @@ static void load_block(
             }
         }
     }
-
-    for (int i = 0; i < 2 * radius + 1; i++) {
-        for (int j = block_size; j < block_size * 2; j++) {
-            block[i * block_size * 2 + j] = 0.0f;
-        }
-    }
 }
 
 static void store_block(
