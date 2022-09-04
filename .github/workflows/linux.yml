@@ -17,7 +17,7 @@ jobs:
     - name: Checkout repo
       uses: actions/checkout@v2
       with:
-        fetch-depth: 1
+        submodules: true
 
     - name: Setup GCC and Ninja
       run: |
@@ -43,19 +43,13 @@ jobs:
         unzip -q vs.zip
         mv vapoursynth*/ vapoursynth
 
-    - name: Download Vector Class Library
-      run: |
-        wget -q -O vcl.zip https://github.com/vectorclass/version2/archive/refs/tags/v2.01.04.zip
-        unzip -q vcl.zip
-        mv version2*/ vectorclass
-
     - name: Configure
       run: cmake -S . -B build -G Ninja
         -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
         -D ENABLE_CUDA=ON
         -D USE_NVRTC_STATIC=ON
         -D ENABLE_CPU=ON
-        -D VCL_HOME="`pwd`/vectorclass"
+        -D VCL_HOME=cpu_source/vectorclass
         -D CMAKE_BUILD_TYPE=Release
         -D CMAKE_CXX_FLAGS_RELEASE="-ffast-math -march=x86-64-v3"
 

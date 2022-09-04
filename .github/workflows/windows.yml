@@ -26,7 +26,7 @@ jobs:
     - name: Checkout repo
       uses: actions/checkout@v2
       with:
-        fetch-depth: 1
+        submodules: true
 
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
@@ -92,12 +92,6 @@ jobs:
         name: cufft-windows
         path: cufft
 
-    - name: Download Vector Class Library
-      run: |
-        curl -s -o vcl.zip -L https://github.com/vectorclass/version2/archive/refs/tags/v2.01.04.zip
-        unzip -q vcl.zip
-        mv version2*/ vectorclass
-
     - name: Configure (CPU)
       shell: bash
       run: cmake -S . -B build_cpu -G Ninja -LA
@@ -105,7 +99,7 @@ jobs:
         -D ENABLE_CUDA=OFF
         -D ENABLE_CPU=ON
         -D VS_INCLUDE_DIR="$(pwd)/vapoursynth/include"
-        -D VCL_HOME="$(pwd)/vectorclass"
+        -D VCL_HOME=cpu_source/vectorclass
         -D CMAKE_CXX_COMPILER=clang++
         -D CMAKE_CXX_FLAGS="-ffast-math -march=x86-64-v3"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
