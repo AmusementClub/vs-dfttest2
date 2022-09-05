@@ -10,11 +10,11 @@ if(ENABLE_CUDA)
 
     find_package(CUDAToolkit REQUIRED)
 
-    add_library(dfttest2_cuda SHARED
+    add_library(dfttest2_cuda MODULE
         cuda_source/source.cpp
         cuda_source/win32.cpp
     )
-    add_library(dfttest2_nvrtc SHARED
+    add_library(dfttest2_nvrtc MODULE
         nvrtc_source/source.cpp
     )
 
@@ -66,7 +66,7 @@ endif() # ENABLE_CUDA
 if(ENABLE_CPU)
     set(VCL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/cpu_source/vectorclass" CACHE PATH "Path to vector class v2 headers")
 
-    add_library(dfttest2_avx2 SHARED cpu_source/source.cpp)
+    add_library(dfttest2_avx2 MODULE cpu_source/source.cpp)
 
     target_include_directories(dfttest2_avx2 PRIVATE ${VCL_HOME})
 
@@ -113,13 +113,13 @@ if(NOT VS_FOUND)
         target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIR})
         target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIR})
 
-        install(TARGETS dfttest2_cuda LIBRARY RUNTIME)
-        install(TARGETS dfttest2_nvrtc LIBRARY RUNTIME)
+        install(TARGETS dfttest2_cuda LIBRARY)
+        install(TARGETS dfttest2_nvrtc LIBRARY)
     endif() # ENABLE_CUDA
 
     if(ENABLE_CPU)
         target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIR})
-        install(TARGETS dfttest2_avx2 LIBRARY RUNTIME)
+        install(TARGETS dfttest2_avx2 LIBRARY)
     endif() # ENABLE_CPU
 endif()
 
