@@ -319,6 +319,9 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         return nullptr;
     }
 
+    auto mxcsr = get_control_word();
+    no_subnormals();
+
     auto vi = vsapi->getVideoInfo(d->node);
 
     DFTTestThreadData thread_data;
@@ -474,6 +477,8 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
             vi->format->bitsPerSample
         );
     }
+
+    set_control_word(mxcsr);
 
     return dst_frame.release();
 }
