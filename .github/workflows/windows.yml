@@ -99,7 +99,6 @@ jobs:
         -D ENABLE_CUDA=OFF
         -D ENABLE_CPU=ON
         -D VS_INCLUDE_DIR="$(pwd)/vapoursynth/include"
-        -D VCL_HOME=cpu_source/vectorclass
         -D CMAKE_CXX_COMPILER=clang++
         -D CMAKE_CXX_FLAGS="-ffast-math -march=x86-64-v3"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded

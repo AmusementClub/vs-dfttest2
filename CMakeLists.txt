@@ -64,7 +64,7 @@ if(ENABLE_CUDA)
 endif() # ENABLE_CUDA
 
 if(ENABLE_CPU)
-    set(VCL_HOME "" CACHE PATH "Path to vector class v2 headers")
+    set(VCL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/cpu_source/vectorclass" CACHE PATH "Path to vector class v2 headers")
 
     add_library(dfttest2_avx2 SHARED cpu_source/source.cpp)
 
