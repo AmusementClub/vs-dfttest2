@@ -75,7 +75,7 @@ jobs:
     - name: Prepare for upload (CUDA)
       run: |
         mkdir artifact_cuda
-        copy install_cuda\bin\*.dll artifact_cuda
+        copy install_cuda\lib\*.dll artifact_cuda
         mkdir cufft
         copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin\cufft64_*.dll" cufft
 
@@ -112,7 +112,7 @@ jobs:
     - name: Prepare for upload (CPU)
       run: |
         mkdir artifact_cpu
-        copy install_cpu\bin\*.dll artifact_cpu
+        copy install_cpu\lib\*.dll artifact_cpu
 
     - name: Upload (CPU)
       uses: actions/upload-artifact@v2

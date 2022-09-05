@@ -113,13 +113,13 @@ if(NOT VS_FOUND)
         target_include_directories(dfttest2_cuda PRIVATE ${VS_INCLUDE_DIR})
         target_include_directories(dfttest2_nvrtc PRIVATE ${VS_INCLUDE_DIR})
 
-        install(TARGETS dfttest2_cuda LIBRARY)
-        install(TARGETS dfttest2_nvrtc LIBRARY)
+        install(TARGETS dfttest2_cuda LIBRARY DESTINATION lib)
+        install(TARGETS dfttest2_nvrtc LIBRARY DESTINATION lib)
     endif() # ENABLE_CUDA
 
     if(ENABLE_CPU)
         target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIR})
-        install(TARGETS dfttest2_avx2 LIBRARY)
+        install(TARGETS dfttest2_avx2 LIBRARY DESTINATION lib)
     endif() # ENABLE_CPU
 endif()
 
