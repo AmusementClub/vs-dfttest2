@@ -764,9 +764,17 @@ static void VS_CC DFTTestCreate(
         d->radius = 0;
     }
 
+    if (d->radius < 0 || d->radius > 3) {
+        return set_error("\"radius\" must be in [0, 1, 2, 3]");
+    }
+
     d->block_size = int64ToIntS(vsapi->propGetInt(in, "block_size", 0, &error));
     if (error) {
-        d->block_size = 8;
+        d->block_size = 16;
+    }
+
+    if (d->block_size != 16) {
+        return set_error("\"block_size\" must be 16");
     }
 
     d->block_step = int64ToIntS(vsapi->propGetInt(in, "block_step", 0, &error));
