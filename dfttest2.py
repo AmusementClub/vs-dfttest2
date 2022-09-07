@@ -1,4 +1,4 @@
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from dataclasses import dataclass
 import math
@@ -252,6 +252,12 @@ def DFTTest2(
     zero_mean = zmean
     backend = init_backend(backend)
 
+    if isinstance(backend, (Backend.CPU, Backend.NVRTC)):
+        if radius not in range(4):
+            raise ValueError("invalid radius (tbsize)")
+        if block_size != 16:
+            raise ValueError("invalid block_size (sbsize)")
+
     # compute constants
     try:
         sigma_scalar = float(sigma) # type: ignore
@@ -471,7 +477,12 @@ def select_backend(
         return backend
 
     if sbsize == 16 and tbsize in [1, 3, 5, 7]:
-        return Backend.NVRTC()
+        if hasattr(core, "dfttest2_nvrtc"):
+            return Backend.NVRTC()
+        elif hasattr(core, "dfttest2_cuda"):
+            return Backend.cuFFT()
+        else:
+            return Backend.CPU()
     else:
         return Backend.cuFFT()
 
