@@ -573,6 +573,107 @@ def DFTTest(
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
     backend: typing.Optional[backendT] = None
 ) -> vs.VideoNode:
+    """ 2D/3D frequency domain denoiser
+
+    The interface is compatible with core.dfttest.DFTTest.
+
+    Args:
+        clip: Clip to process.
+
+            Any format with either integer sample type of 8-16 bit depth
+            or float sample type of 32 bit depth is supported.
+
+        ftype: Controls the filter type.
+
+            Possible settings are:
+                0: generalized wiener filter
+                    mult = max((psd - sigma) / psd, 0) ^ f0beta
+
+                1: hard threshold
+                    mult = psd < sigma ? 0.0 : 1.0
+
+                2: multiplier
+                    mult = sigma
+
+                3: multiplier switched based on psd value
+                    mult = (psd >= pmin && psd <= pmax) ? sigma : sigma2
+
+                4: multiplier modified based on psd value and range
+                    mult = sigma * sqrt((psd * pmax) / ((psd + pmin) * (psd + pmax)))
+
+            The real and imaginary parts of each complex dft coefficient are multiplied
+            by the corresponding 'mult' value.
+
+            ** psd = magnitude squared = real*real + imag*imag
+
+        sigma, sigma2: Value of sigma and sigma2.
+            If using the slocation parameter then the sigma parameter is ignored.
+
+        pmin, pmax: Used as described in the ftype parameter description.
+
+        sbsize: Sets the length of the sides of the spatial window.
+            Must be 1 or greater. Must be odd if using smode=0.
+
+        smode: Sets the mode for spatial operation.
+            Currently only tmode=1 is implemented.
+
+        sosize: Sets the spatial overlap amount.
+            Must be in the range 0 to sbsize-1 (inclusive).
+            If sosize is greater than sbsize>>1, then sbsize%(sbsize-sosize) must equal 0.
+            In other words, overlap greater than 50% requires that sbsize-sosize be a divisor of sbsize.
+
+        tbsize: Sets the length of the temporal dimension (i.e. number of frames).
+            Must be at least 1. Must be odd if using tmode=0.
+
+        tmode: Sets the mode for temporal operation.
+            Currently only tmode=0 is implemented.
+
+        tosize: Sets the temporal overlap amount.
+            Must be in the range 0 to tbsize-1 (inclusive).
+            If tosize is greater than tbsize>>1, then tbsize%(tbsize-tosize) must equal 0.
+            In other words, overlap greater than 50% requires that tbsize-tosize be a divisor of tbsize.
+
+        swin, twin: Sets the type of analysis/synthesis window to be used for spatial (swin) and
+            temporal (twin) processing. Possible settings:
+
+            0: hanning
+            1: hamming
+            2: blackman
+            3: 4 term blackman-harris
+            4: kaiser-bessel
+            5: 7 term blackman-harris
+            6: flat top
+            7: rectangular
+            8: Bartlett
+            9: Bartlett-Hann
+            10: Nuttall
+            11: Blackman-Nuttall
+
+        sbeta,tbeta: Sets the beta value for kaiser-bessel window type.
+            sbeta goes with swin, tbeta goes with twin.
+            Not used unless the corresponding window value is set to 4.
+
+        zmean: Controls whether the window mean is subtracted out (zero'd)
+            prior to filtering in the frequency domain.
+
+        f0beta: Power term in ftype=0.
+
+        nlocation: Currently not implemented.
+
+        slocation/ssx/ssy/sst: Used to specify functions of sigma based on frequency.
+            Check the original documentation for details.
+
+            Note that in current implementation,
+            "slocation = [(0.0, 1.0), (1.0, 10.0)]"
+            is equivalent to
+            "slocation = [0.0, 1.0, 1.0, 10.0]"
+
+        ssystem: Method of sigma computation.
+            Check the original documentation for details.
+
+        planes: Sets which planes will be processed.
+            Any unprocessed planes will be simply copied.
+    """
 
     if (
         not isinstance(clip, vs.VideoNode) or
