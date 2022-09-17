@@ -1,4 +1,4 @@
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 from dataclasses import dataclass
 import math
@@ -35,7 +35,7 @@ def init_backend(backend: backendT) -> backendT:
         backend = Backend.cuFFT()
     elif backend is Backend.NVRTC: # type: ignore
         backend = Backend.NVRTC()
-    elif backend is Backend.CPU:
+    elif backend is Backend.CPU: # type: ignore
         backend = Backend.CPU()
     return backend
 
@@ -487,6 +487,27 @@ def select_backend(
         return Backend.cuFFT()
 
 
+FREQ = float
+SIGMA = float
+def flatten(
+    data: typing.Optional[typing.Union[
+        typing.Sequence[typing.Tuple[FREQ, SIGMA]],
+        typing.Sequence[float]
+    ]]
+) -> typing.Optional[typing.List[float]]:
+
+    import itertools as it
+    import numbers
+
+    if data is None:
+        return None
+    elif isinstance(data[0], numbers.Real):
+        return data
+    else:
+        data = typing.cast(typing.Sequence[typing.Tuple[FREQ, SIGMA]], data)
+        return list(it.chain.from_iterable(data))
+
+
 def to_func(
     data: typing.Optional[typing.Sequence[float]],
     norm: typing.Callable[[float], float],
@@ -532,10 +553,22 @@ def DFTTest(
     f0beta: float = 1.0,
     nlocation: typing.Optional[typing.Sequence[int]] = None,
     alpha: typing.Optional[float] = None,
-    slocation: typing.Optional[typing.Sequence[float]] = None,
-    ssx: typing.Optional[typing.Sequence[float]] = None,
-    ssy: typing.Optional[typing.Sequence[float]] = None,
-    sst: typing.Optional[typing.Sequence[float]] = None,
+    slocation: typing.Optional[typing.Union[
+        typing.Sequence[typing.Tuple[FREQ, SIGMA]],
+        typing.Sequence[float]
+    ]] = None,
+    ssx: typing.Optional[typing.Union[
+        typing.Sequence[typing.Tuple[FREQ, SIGMA]],
+        typing.Sequence[float]
+    ]] = None,
+    ssy: typing.Optional[typing.Union[
+        typing.Sequence[typing.Tuple[FREQ, SIGMA]],
+        typing.Sequence[float]
+    ]] = None,
+    sst: typing.Optional[typing.Union[
+        typing.Sequence[typing.Tuple[FREQ, SIGMA]],
+        typing.Sequence[float]
+    ]] = None,
     ssystem: typing.Literal[0, 1] = 0,
     planes: typing.Optional[typing.Union[int, typing.Sequence[int]]] = None,
     backend: typing.Optional[backendT] = None
@@ -598,9 +631,9 @@ def DFTTest(
     _sigma: typing.Union[float, typing.Sequence[typing.Callable[[float], float]]]
 
     if slocation is not None:
-        _sigma = [to_func(slocation, norm, sigma)] * 3
+        _sigma = [to_func(flatten(slocation), norm, sigma)] * 3
     elif any(ss is not None for ss in (ssx, ssy, sst)):
-        _sigma = [to_func(ss, norm, sigma) for ss in (ssx, ssy, sst)]
+        _sigma = [to_func(flatten(ss), norm, sigma) for ss in (ssx, ssy, sst)]
     else:
         _sigma = sigma
 
