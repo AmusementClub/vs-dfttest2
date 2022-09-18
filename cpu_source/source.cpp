@@ -8,7 +8,9 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#if __cplusplus >= 202002L
 #include <numbers>
+#endif
 #include <shared_mutex>
 #include <thread>
 #include <type_traits>
@@ -31,12 +33,17 @@ static void dft(
     int n,
     int stride
 ) {
+#if __cplusplus >= 202002L
+    const auto pi = std::numbers::pi_v<T>;
+#else
+    const auto pi = static_cast<T>(M_PI);
+#endif
 
     int out_num = std::is_floating_point_v<T_in> ? (n / 2 + 1) : n;
     for (int i = 0; i < out_num; i++) {
         std::complex<T> sum {};
         for (int j = 0; j < n; j++) {
-            auto imag = -2 * i * j * std::numbers::pi_v<T> / n;
+            auto imag = -2 * i * j * pi / n;
             auto weight = std::complex(std::cos(imag), std::sin(imag));
             sum += src[j * stride] * weight;
         }
