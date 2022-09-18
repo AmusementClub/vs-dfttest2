@@ -575,7 +575,7 @@ def DFTTest(
 ) -> vs.VideoNode:
     """ 2D/3D frequency domain denoiser
 
-    The interface is compatible with core.dfttest.DFTTest.
+    The interface is compatible with core.dfttest.DFTTest by HolyWu.
 
     Args:
         clip: Clip to process.
@@ -673,6 +673,15 @@ def DFTTest(
 
         planes: Sets which planes will be processed.
             Any unprocessed planes will be simply copied.
+
+        backend: Backend implementation to use.
+            All available backends can be found in the dfttest2.Backend "namespace":
+                dfttest2.Backend.{CPU, cuFFT, NVRTC}
+            
+            The CPU and NVRTC backend require sbsize=16.
+            The cuFFT and NVRTC backend require a CUDA-enabled system.
+            
+            Speed: NVRTC >> cuFFT > CPU
     """
 
     if (
