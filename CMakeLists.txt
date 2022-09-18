@@ -5,6 +5,24 @@ project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX)
 set(ENABLE_CUDA ON CACHE BOOL "Whether to compile with CUDA backends")
 set(ENABLE_CPU ON CACHE BOOL "Whether to compile with x86 backends")
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build" FORCE)
+endif()
+
+if(CMAKE_CXX_FLAGS STREQUAL "")
+    if ((CMAKE_CXX_COMPILER_ID STREQUAL "MSVC") OR
+        (((CMAKE_CXX_COMPILER_ID STREQUAL "Intel") OR (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")) AND
+         (CMAKE_SYSTEM_NAME STREQUAL "Windows")))
+
+        set(CXX_COMPILE_OPTIONS_CPU /arch:AVX2 /fp:fast CACHE STRING "native c++ compile options for CPU backend")
+        set(CXX_COMPILE_OPTIONS_GPU /arch:AVX /fp:fast CACHE STRING "native c++ compile options for GPU backends")
+    else()
+        set(CXX_COMPILE_OPTIONS_CPU -march=native -ffast-math CACHE STRING "native c++ compile options for CPU backend")
+        set(CXX_COMPILE_OPTIONS_GPU -march=native -ffast-math CACHE STRING "native c++ compile options for GPU backends")
+    endif()
+    
+endif()
+
 if(ENABLE_CUDA)
     set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
@@ -61,6 +79,11 @@ if(ENABLE_CUDA)
         target_link_libraries(dfttest2_cuda PRIVATE CUDA::nvrtc)
         target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::nvrtc)
     endif()
+
+    if(DEFINED COMPILE_OPTIONS)
+        target_compile_options(dfttest2_cuda PRIVATE ${CXX_COMPILE_OPTIONS_GPU})
+        target_compile_options(dfttest2_nvrtc PRIVATE ${CXX_COMPILE_OPTIONS_GPU})
+    endif()
 endif() # ENABLE_CUDA
 
 if(ENABLE_CPU)
@@ -75,6 +98,10 @@ if(ENABLE_CPU)
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
+
+    if(DEFINED COMPILE_OPTIONS)
+        target_compile_options(dfttest2_avx2 PRIVATE ${CXX_COMPILE_OPTIONS_CPU})
+    endif()
 endif() # ENABLE_CPU
 
 find_package(PkgConfig QUIET MODULE)
