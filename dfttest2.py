@@ -25,7 +25,7 @@ class Backend:
 
     @dataclass(frozen=False)
     class CPU:
-        pass
+        opt: int = 0
 
 backendT = typing.Union[Backend.cuFFT, Backend.NVRTC, Backend.CPU]
 
@@ -327,7 +327,7 @@ def DFTTest2(
     elif isinstance(backend, Backend.NVRTC):
         rdft = core.dfttest2_nvrtc.RDFT
     elif isinstance(backend, Backend.CPU):
-        rdft = core.dfttest2_avx2.RDFT
+        rdft = core.dfttest2_cpu.RDFT
     else:
         raise TypeError("unknown backend")
 
@@ -343,7 +343,7 @@ def DFTTest2(
         )
 
     if isinstance(backend, Backend.CPU):
-        return core.dfttest2_avx2.DFTTest(
+        return core.dfttest2_cpu.DFTTest(
             clip,
             window=window,
             sigma=[sigma_scalar] * (2 * radius + 1) * block_size * (block_size // 2 + 1) if sigma_is_scalar else sigma_array,
@@ -355,7 +355,8 @@ def DFTTest2(
             block_step=block_step,
             planes=planes,
             filter_type=filter_type,
-            window_freq=window_freq
+            window_freq=window_freq,
+            opt=backend.opt
         )
 
     if isinstance(backend, Backend.cuFFT):

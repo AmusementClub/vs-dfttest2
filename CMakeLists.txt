@@ -9,20 +9,6 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build" FORCE)
 endif()
 
-if(CMAKE_CXX_FLAGS STREQUAL "")
-    if ((CMAKE_CXX_COMPILER_ID STREQUAL "MSVC") OR
-        (((CMAKE_CXX_COMPILER_ID STREQUAL "Intel") OR (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")) AND
-         (CMAKE_SYSTEM_NAME STREQUAL "Windows")))
-
-        set(CXX_COMPILE_OPTIONS_CPU /arch:AVX2 /fp:fast CACHE STRING "native c++ compile options for CPU backend")
-        set(CXX_COMPILE_OPTIONS_GPU /arch:AVX /fp:fast CACHE STRING "native c++ compile options for GPU backends")
-    else()
-        set(CXX_COMPILE_OPTIONS_CPU -march=native -ffast-math CACHE STRING "native c++ compile options for CPU backend")
-        set(CXX_COMPILE_OPTIONS_GPU -march=native -ffast-math CACHE STRING "native c++ compile options for GPU backends")
-    endif()
-    
-endif()
-
 if(ENABLE_CUDA)
     set(USE_NVRTC_STATIC ON CACHE BOOL "Whether to use NVRTC static library")
 
@@ -79,30 +65,7 @@ if(ENABLE_CUDA)
         target_link_libraries(dfttest2_cuda PRIVATE CUDA::nvrtc)
         target_link_libraries(dfttest2_nvrtc PRIVATE CUDA::nvrtc)
     endif()
-
-    if(DEFINED COMPILE_OPTIONS)
-        target_compile_options(dfttest2_cuda PRIVATE ${CXX_COMPILE_OPTIONS_GPU})
-        target_compile_options(dfttest2_nvrtc PRIVATE ${CXX_COMPILE_OPTIONS_GPU})
-    endif()
 endif() # ENABLE_CUDA
-
-if(ENABLE_CPU)
-    set(VCL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/cpu_source/vectorclass" CACHE PATH "Path to vector class v2 headers")
-
-    add_library(dfttest2_avx2 MODULE cpu_source/source.cpp)
-
-    target_include_directories(dfttest2_avx2 PRIVATE ${VCL_HOME})
-
-    set_target_properties(dfttest2_avx2 PROPERTIES
-        CXX_EXTENSIONS OFF
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    if(DEFINED COMPILE_OPTIONS)
-        target_compile_options(dfttest2_avx2 PRIVATE ${CXX_COMPILE_OPTIONS_CPU})
-    endif()
-endif() # ENABLE_CPU
 
 find_package(PkgConfig QUIET MODULE)
 
@@ -121,11 +84,6 @@ if(PKG_CONFIG_FOUND)
             install(TARGETS dfttest2_cuda LIBRARY DESTINATION ${install_dir})
             install(TARGETS dfttest2_nvrtc LIBRARY DESTINATION ${install_dir})
         endif() # ENABLE_CUDA
-
-        if(ENABLE_CPU)
-            target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIRS})
-            install(TARGETS dfttest2_avx2 LIBRARY DESTINATION ${install_dir})
-        endif()
     endif()
 endif()
 
@@ -143,11 +101,6 @@ if(NOT VS_FOUND)
         install(TARGETS dfttest2_cuda LIBRARY DESTINATION lib)
         install(TARGETS dfttest2_nvrtc LIBRARY DESTINATION lib)
     endif() # ENABLE_CUDA
-
-    if(ENABLE_CPU)
-        target_include_directories(dfttest2_avx2 PRIVATE ${VS_INCLUDE_DIR})
-        install(TARGETS dfttest2_avx2 LIBRARY DESTINATION lib)
-    endif() # ENABLE_CPU
 endif()
 
 find_package(Git QUIET)
@@ -182,5 +135,5 @@ if(ENABLE_CUDA)
 endif() # ENABLE_CUDA
 
 if(ENABLE_CPU)
-    target_include_directories(dfttest2_avx2 PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    add_subdirectory(cpu_source)
 endif() # ENABLE_CPU

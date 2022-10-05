@@ -1,0 +1,14 @@
+#ifdef HAS_DISPATCH
+
+#ifndef CPU_DISPATCH_H
+#define CPU_DISPATCH_H
+
+#include <VapourSynth.h>
+
+@GETFRAME_DECLARATIONS@
+
+@SUPPORTED_ARCH_DECLARATIONS@
+
+#endif // CPU_DISPATCH_H
+
+#endif // HAS_DISPATCH

@@ -60,7 +60,7 @@ jobs:
         -D USE_NVRTC_STATIC=ON
         -D ENABLE_CPU=OFF
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
-        -D CMAKE_CXX_FLAGS="/fp:fast /arch:AVX /EHsc"
+        -D CMAKE_CXX_FLAGS="/fp:fast /EHsc"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
         CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
@@ -100,7 +100,7 @@ jobs:
         -D ENABLE_CPU=ON
         -D VS_INCLUDE_DIR="$(pwd)/vapoursynth/include"
         -D CMAKE_CXX_COMPILER=clang++
-        -D CMAKE_CXX_FLAGS="-ffast-math -march=x86-64-v3"
+        -D CMAKE_CXX_FLAGS="-ffast-math"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
     - name: Build (CPU)
@@ -139,7 +139,7 @@ jobs:
         cd ../artifact_cpu
 
         mkdir vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}
-        xcopy dfttest2_avx2.dll vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }} /f
+        xcopy dfttest2_cpu.dll vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }} /f
         7z a -t7z -mx=9 ../vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}.7z vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}
 
     - name: Release
