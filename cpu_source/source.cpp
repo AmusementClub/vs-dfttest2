@@ -253,7 +253,7 @@ static void VS_CC DFTTestCreate(
         bool found_supported_impl = false;
 
         for (int i = static_cast<int>(getframe_candidates.size()) - 1; i >= 0; i--) {
-            if (supported_arch_candidates[i]) {
+            if (supported_arch_candidates[i]()) {
                 vsapi->createFilter(
                     in, out, "DFTTest",
                     DFTTestInit, getframe_candidates[i], DFTTestFree,
