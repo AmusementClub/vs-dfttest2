@@ -36,8 +36,10 @@ if(CPU_DISPATCH_TARGETS)
     set(GETFRAME_PTRS "")
     set(SUPPORTED_ARCH_DECLARATIONS "")
     set(SUPPORTED_ARCH_PTRS "")
+    set(SUPPORTED_ARCH_STRS "")
 
     foreach(arch_option ${CPU_DISPATCH_TARGETS})
+        set(raw_arch_option ${arch_option})
         string(REPLACE "=" "_" arch ${arch_option})
         string(REPLACE "-" "_" arch ${arch})
 
@@ -99,6 +101,8 @@ if(CPU_DISPATCH_TARGETS)
 
         string(APPEND SUPPORTED_ARCH_PTRS ${current_supported_arch_name},)
 
+        string(APPEND SUPPORTED_ARCH_STRS \"${raw_arch_option}\",)
+
         target_link_libraries(dfttest2_cpu PRIVATE ${current_target})
     endforeach()
 
@@ -106,6 +110,7 @@ if(CPU_DISPATCH_TARGETS)
 
     target_compile_definitions(dfttest2_cpu PRIVATE GETFRAME_PTRS=${GETFRAME_PTRS})
     target_compile_definitions(dfttest2_cpu PRIVATE SUPPORTED_ARCH_PTRS=${SUPPORTED_ARCH_PTRS})
+    target_compile_definitions(dfttest2_cpu PRIVATE SUPPORTED_ARCH_STRS=${SUPPORTED_ARCH_STRS})
     target_include_directories(dfttest2_cpu PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 else()
     add_library(getframe_impl OBJECT getframe_impl.cpp)

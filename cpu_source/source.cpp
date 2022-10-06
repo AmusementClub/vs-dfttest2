@@ -153,7 +153,10 @@ static void VS_CC DFTTestCreate(
     }
 
     {
-        auto ptr = vs_aligned_malloc<float>((2 * d->radius + 1) * d->block_size * d->block_size * sizeof(float), 64);
+        auto ptr = vs_aligned_malloc<float>(
+            (2 * d->radius + 1) * d->block_size * d->block_size * sizeof(float),
+            64
+        );
         if (ptr == nullptr) {
             return set_error("alloc error");
         }
@@ -168,7 +171,10 @@ static void VS_CC DFTTestCreate(
     }
 
     {
-        auto ptr = vs_aligned_malloc<float>((2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1 + 15) * sizeof(float), 64);
+        auto ptr = vs_aligned_malloc<float>(
+            (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1 + 15) * sizeof(float),
+            64
+        );
         if (ptr == nullptr) {
             return set_error("alloc error");
         }
@@ -197,7 +203,10 @@ static void VS_CC DFTTestCreate(
     }
     if (d->zero_mean) {
         {
-            auto ptr = vs_aligned_malloc<float>((2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1 + 15) * 2 * sizeof(float), 64);
+            auto ptr = vs_aligned_malloc<float>(
+                (2 * d->radius + 1) * d->block_size * (d->block_size / 2 + 1 + 15) * 2 * sizeof(float),
+                64
+            );
             if (ptr == nullptr) {
                 return set_error("alloc error");
             }
@@ -236,10 +245,10 @@ static void VS_CC DFTTestCreate(
         opt = 0;
     }
 
-    static std::array getframe_candidates { GETFRAME_PTRS };
+    constexpr std::array getframe_candidates { GETFRAME_PTRS };
 
     if (opt == 0) {
-        static std::array supported_arch_candidates { SUPPORTED_ARCH_PTRS };
+        constexpr std::array supported_arch_candidates { SUPPORTED_ARCH_PTRS };
 
         bool found_supported_impl = false;
 
@@ -357,6 +366,16 @@ static void VS_CC RDFT(
 
 static void Version(const VSMap *, VSMap * out, void *, VSCore *, const VSAPI *vsapi) {
     vsapi->propSetData(out, "version", VERSION, -1, paReplace);
+
+#ifdef HAS_DISPATCH
+    constexpr std::array dispatch_targets { "auto", SUPPORTED_ARCH_STRS };
+
+    for (int i = 0; i < static_cast<int>(dispatch_targets.size()); i++) {
+        vsapi->propSetData(out, "dispatch_targets", dispatch_targets[i], -1, paAppend);
+    }
+#else // HAS_DISPATCH
+    vsapi->propSetData(out, "dispatch_targets", target_arch(), -1, paReplace);
+#endif // HAS_DISPATCH
 }
 
 

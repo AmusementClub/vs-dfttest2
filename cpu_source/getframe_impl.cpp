@@ -430,3 +430,17 @@ bool SUPPORTED_ARCH_NAME() noexcept {
 
     return instrset_detect() >= INSTRSET;
 }
+
+#ifndef HAS_DISPATCH
+const char * target_arch() noexcept {
+#if 0 <= INSTRSET && INSTRSET <= 10
+    constexpr std::array dispatch_targets {
+        "none", "sse", "sse2", "sse3", "sse4.1", "sse4.2",
+        "avx", "avx2", "avx512f", "avx512bw/dq/vl"
+    };
+    return dispatch_targets[INSTRSET];
+#else // 0 <= INSTRSET && INSTRSET <= 10
+    return "unknown";
+#endif // 0 <= INSTRSET && INSTRSET <= 10
+}
+#endif // HAS_DISPATCH

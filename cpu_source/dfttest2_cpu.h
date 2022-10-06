@@ -55,6 +55,8 @@ extern const VSFrameRef *VS_CC DFTTestGetFrame(
 ) noexcept;
 
 extern bool supported_arch() noexcept;
+
+extern const char * target_arch() noexcept;
 #endif // HAS_DISPATCH
 
 #endif // DFTTEST2_CPU_H
