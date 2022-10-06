@@ -435,7 +435,7 @@ bool SUPPORTED_ARCH_NAME() noexcept {
 const char * target_arch() noexcept {
 #if 0 <= INSTRSET && INSTRSET <= 10
     constexpr std::array dispatch_targets {
-        "none", "sse", "sse2", "sse3", "sse4.1", "sse4.2",
+        "80386", "sse", "sse2", "sse3", "sse4.1", "sse4.2",
         "avx", "avx2", "avx512f", "avx512bw/dq/vl"
     };
     return dispatch_targets[INSTRSET];
