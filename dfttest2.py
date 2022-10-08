@@ -27,7 +27,11 @@ class Backend:
     class CPU:
         opt: int = 0
 
-backendT = typing.Union[Backend.cuFFT, Backend.NVRTC, Backend.CPU]
+    @dataclass(frozen=False)
+    class GCC:
+        pass
+
+backendT = typing.Union[Backend.cuFFT, Backend.NVRTC, Backend.CPU, Backend.GCC]
 
 
 def init_backend(backend: backendT) -> backendT:
@@ -37,6 +41,8 @@ def init_backend(backend: backendT) -> backendT:
         backend = Backend.NVRTC()
     elif backend is Backend.CPU: # type: ignore
         backend = Backend.CPU()
+    elif backend is Backend.GCC: # type: ignore
+        backend = Backend.GCC()
     return backend
 
 
@@ -252,7 +258,7 @@ def DFTTest2(
     zero_mean = zmean
     backend = init_backend(backend)
 
-    if isinstance(backend, (Backend.CPU, Backend.NVRTC)):
+    if isinstance(backend, (Backend.CPU, Backend.NVRTC, Backend.GCC)):
         if radius not in range(4):
             raise ValueError("invalid radius (tbsize)")
         if block_size != 16:
@@ -328,6 +334,8 @@ def DFTTest2(
         rdft = core.dfttest2_nvrtc.RDFT
     elif isinstance(backend, Backend.CPU):
         rdft = core.dfttest2_cpu.RDFT
+    elif isinstance(backend, Backend.GCC):
+        rdft = core.dfttest2_gcc.RDFT
     else:
         raise TypeError("unknown backend")
 
@@ -357,6 +365,21 @@ def DFTTest2(
             filter_type=filter_type,
             window_freq=window_freq,
             opt=backend.opt
+        )
+    elif isinstance(backend, Backend.GCC):
+        return core.dfttest2_gcc.DFTTest(
+            clip,
+            window=window,
+            sigma=[sigma_scalar] * (2 * radius + 1) * block_size * (block_size // 2 + 1) if sigma_is_scalar else sigma_array,
+            sigma2=sigma2,
+            pmin=pmin,
+            pmax=pmax,
+            radius=radius,
+            block_size=block_size,
+            block_step=block_step,
+            planes=planes,
+            filter_type=filter_type,
+            window_freq=window_freq
         )
 
     if isinstance(backend, Backend.cuFFT):
@@ -482,8 +505,10 @@ def select_backend(
             return Backend.NVRTC()
         elif hasattr(core, "dfttest2_cuda"):
             return Backend.cuFFT()
-        else:
+        elif hasattr(core, "dfttest2_cpu"):
             return Backend.CPU()
+        else:
+            return Backend.GCC()
     else:
         return Backend.cuFFT()
 
@@ -677,12 +702,12 @@ def DFTTest(
 
         backend: Backend implementation to use.
             All available backends can be found in the dfttest2.Backend "namespace":
-                dfttest2.Backend.{CPU, cuFFT, NVRTC}
-            
-            The CPU and NVRTC backend require sbsize=16.
+                dfttest2.Backend.{CPU, cuFFT, NVRTC, GCC}
+
+            The CPU, NVRTC and GCC backends require sbsize=16.
             The cuFFT and NVRTC backend require a CUDA-enabled system.
-            
-            Speed: NVRTC >> cuFFT > CPU
+
+            Speed: NVRTC >> cuFFT > CPU == GCC
     """
 
     if (
