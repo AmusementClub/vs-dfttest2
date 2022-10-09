@@ -35,7 +35,7 @@ static inline Vec16f sqrt(Vec16f x) {
     for (int i = 0; i < 16; i++) {
         ret[i] = std::sqrt(x[i]);
     }
-    
+
     return ret;
 }
 
@@ -45,22 +45,22 @@ static inline Vec16f pow(Vec16f base, Vec16f exp) {
     for (int i = 0; i < 16; i++) {
         ret[i] = std::pow(base[i], exp[i]);
     }
-    
+
     return ret;
 }
 
 static inline Vec16f max(Vec16f x, Vec16f y) {
-#if __clang__
+#if __clang__ && __clang_major__ >= 14
     return __builtin_elementwise_max(x, y);
-#else // __clang__
+#else // __clang__ && __clang_major__ >= 14
     Vec16f ret;
 
     for (int i = 0; i < 16; i++) {
         ret[i] = std::fmax(x[i], y[i]);
     }
-    
+
     return ret;
-#endif // __clang__
+#endif // __clang__ && __clang_major__ >= 14
 }
 
 template <int n>
