@@ -25,7 +25,7 @@ static T square(T x) {
 #endif
 
 static inline constexpr Vec16f __attribute__((__always_inline__)) constant(float val) {
-    Vec16f ret = { val, val, val, val, val, val, val, val, val, val, val, val, val, val, val };
+    Vec16f ret = { val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val };
     return ret;
 }
 
