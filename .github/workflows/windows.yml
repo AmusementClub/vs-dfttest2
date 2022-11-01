@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         submodules: true
 
@@ -36,16 +36,16 @@ jobs:
 
     - name: Cache CUDA
       id: cache-cuda
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: ${{ runner.os }}-cuda-11.7.0
+        key: ${{ runner.os }}-cuda-11.8.0
 
     - name: Setup CUDA
       if: steps.cache-cuda.outputs.cache-hit != 'true'
       run: |
-        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/11.7.0/network_installers/cuda_11.7.0_windows_network.exe
-        cuda_installer.exe -s nvcc_11.7 cudart_11.7 nvrtc_dev_11.7 cufft_11.7 cufft_dev_11.7
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/11.8.0/network_installers/cuda_11.8.0_windows_network.exe
+        cuda_installer.exe -s nvcc_11.8 cudart_11.8 nvrtc_dev_11.8 cufft_11.8 cufft_dev_11.8
 
     - name: Download VapourSynth headers
       run: |
@@ -63,8 +63,8 @@ jobs:
         -D CMAKE_CXX_FLAGS="/fp:fast /EHsc"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
-        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
-        CUDA_PATH_V11_7: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7
+        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
+        CUDA_PATH_V11_8: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
 
     - name: Build (CUDA)
       run: cmake --build build_cuda --verbose
@@ -77,16 +77,16 @@ jobs:
         mkdir artifact_cuda
         copy install_cuda\lib\*.dll artifact_cuda
         mkdir cufft
-        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin\cufft64_*.dll" cufft
+        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin\cufft64_*.dll" cufft
 
     - name: Upload (CUDA)
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: vs-dfttest2-cuda-windows
         path: artifact_cuda
 
     - name: Upload cufft
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       if: false
       with:
         name: cufft-windows
@@ -115,7 +115,7 @@ jobs:
         copy install_cpu\lib\*.dll artifact_cpu
 
     - name: Upload (CPU)
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: vs-dfttest2-cpu-windows
         path: artifact_cpu
