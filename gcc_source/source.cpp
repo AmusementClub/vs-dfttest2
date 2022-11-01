@@ -336,7 +336,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(
     configFunc(
         "io.github.amusementclub.dfttest2_gcc",
         "dfttest2_gcc",
-        "DFTTest2 (GCC extension)",
+        "DFTTest2 (GCC vector extension)",
         VAPOURSYNTH_API_VERSION, 1, plugin
     );
 
