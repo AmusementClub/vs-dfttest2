@@ -1,4 +1,4 @@
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 from dataclasses import dataclass
 import math
@@ -731,6 +731,9 @@ def DFTTest(
 
     if sosize > sbsize // 2 and (sbsize % (sbsize - sosize) != 0):
         raise ValueError("spatial overlap greater than 50% requires that sbsize-sosize is a divisor of sbsize")
+
+    if tbsize < 1:
+        raise ValueError('"tbsize" must be at least 1')
 
     if swin < 0 or swin > 11:
         raise ValueError("swin must be between 0 and 11 (inclusive)")
