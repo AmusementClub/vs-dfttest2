@@ -13,7 +13,7 @@
 #include <VSHelper.h>
 
 
-static void vs_aligned_free_float(float * ptr) {
+static inline void vs_aligned_free_float(float * ptr) {
     vs_aligned_free(static_cast<void *>(ptr));
 }
 

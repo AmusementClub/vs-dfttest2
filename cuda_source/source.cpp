@@ -16,7 +16,9 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <VapourSynth.h>
 #include <VSHelper.h>
@@ -155,7 +157,7 @@ static void nvrtcDestroyProgramCustom(nvrtcProgram * program) {
 
 struct context_releaser {
     bool * context_retained {};
-    CUdevice device;
+    CUdevice device {};
     void release() {
         context_retained = nullptr;
     }
@@ -380,7 +382,7 @@ static std::variant<CUmodule, std::string> compile(
     kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
     if (sample_type == stInteger) {
         int bytes_per_sample = bits_per_sample / 8;
-        const char * type;
+        const char * type {};
         if (bytes_per_sample == 1) {
             type = "unsigned char";
         } else if (bytes_per_sample == 2) {
@@ -756,11 +758,13 @@ static void VS_CC DFTTestFree(
         showError(cuMemFreeHost(thread_data.h_padded));
     }
 
+    auto device = d->device;
+
     delete d;
 
     showError(cuCtxPopCurrent(nullptr));
 
-    showError(cuDevicePrimaryCtxRelease(d->device));
+    showError(cuDevicePrimaryCtxRelease(device));
 }
 
 static void VS_CC DFTTestCreate(

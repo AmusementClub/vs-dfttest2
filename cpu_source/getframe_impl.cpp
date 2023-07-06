@@ -169,7 +169,6 @@ static inline void store_block(
     int block_size,
     int block_step,
     int width,
-    int height,
     const Vec16f * VS_RESTRICT shifted_window
 ) {
 
@@ -393,7 +392,6 @@ DFTTEST_GETFRAME_NAME
                     block_size,
                     d->block_step,
                     width,
-                    height,
                     reinterpret_cast<const Vec16f *>(&d->window[d->radius * block_size * 2 * 16])
                 );
             }
