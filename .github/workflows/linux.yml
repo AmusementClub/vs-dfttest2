@@ -24,8 +24,8 @@ jobs:
 
     - name: Setup CUDA
       run: |
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
-        sudo dpkg -i cuda-keyring_1.0-1_all.deb
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
         sudo apt-get update
         sudo apt-get install -y cuda-nvcc-11-8 cuda-cudart-dev-11-8 cuda-nvrtc-dev-11-8 libcufft-dev-11-8
         echo "PATH=/usr/local/cuda/bin${PATH:+:${PATH}}" >> $GITHUB_ENV
@@ -45,6 +45,7 @@ jobs:
         -D USE_NVRTC_STATIC=ON
         -D ENABLE_CPU=ON
         -D CMAKE_BUILD_TYPE=Release
+        -D CMAKE_CXX_COMPILER=g++-12
         -D CMAKE_CXX_FLAGS="-Wall -ffast-math"
 
     - name: Build
