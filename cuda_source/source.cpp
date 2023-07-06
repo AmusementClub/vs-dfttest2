@@ -16,7 +16,9 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <VapourSynth.h>
 #include <VSHelper.h>
@@ -586,7 +588,7 @@ static const VSFrameRef *VS_CC DFTTestGetFrame(
         }
     }
 
-    std::vector<std::unique_ptr<const VSFrameRef, decltype(vsapi->freeFrame)>> src_frames;
+    std::template vector<std::template unique_ptr<const VSFrameRef, decltype(vsapi->freeFrame)>> src_frames;
     src_frames.reserve(2 * d->radius + 1);
     for (int i = n - d->radius; i <= n + d->radius; i++) {
         src_frames.emplace_back(
