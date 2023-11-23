@@ -61,6 +61,7 @@ jobs:
         -D ENABLE_CPU=OFF
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /EHsc"
+        -D CMAKE_SHARED_LINKER_FLAGS="/DELAYLOAD:cufft64_11.dll"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
         CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0
