@@ -175,7 +175,7 @@ if(ENABLE_CUDA)
     target_include_directories(dfttest2_nvrtc PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
     if (WIN32)
-        target_link_options(dfttest2_cuda PRIVATE "/DELAYLOAD:cufft64_10.dll" "delayimp.lib")
+        target_link_options(dfttest2_cuda PRIVATE "delayimp.lib")
     endif()
 endif() # ENABLE_CUDA
 
