@@ -2,10 +2,10 @@ cmake_minimum_required(VERSION 3.22.0)
 
 project(vs-dfttest2 VERSION 0.1 LANGUAGES CXX)
 
-set(ENABLE_CUDA OFF CACHE BOOL "Whether to compile with CUDA backends")
-set(ENABLE_CPU ON CACHE BOOL "Whether to compile with x86 backends")
-set(ENABLE_GCC OFF CACHE BOOL "Whether to compile with gcc vector extension backends")
-set(ENABLE_HIP OFF CACHE BOOL "Whether to compile with HIPRTC backends")
+set(ENABLE_CUDA ON CACHE BOOL "Whether to compile with CUDA backends")
+set(ENABLE_CPU ON CACHE BOOL "Whether to compile with x86 backend")
+set(ENABLE_GCC OFF CACHE BOOL "Whether to compile with gcc vector extension backend")
+set(ENABLE_HIP OFF CACHE BOOL "Whether to compile with HIP backends")
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build" FORCE)
