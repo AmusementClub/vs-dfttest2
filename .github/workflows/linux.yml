@@ -54,6 +54,30 @@ jobs:
     - name: Install
       run: cmake --install build --prefix artifact
 
+    - name: Setup HIP
+      run: |
+        wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.0.2 jammy main" | sudo tee --append /etc/apt/sources.list.d/rocm.list
+        echo -e 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600' | sudo tee /etc/apt/preferences.d/rocm-pin-600
+        sudo apt update
+        sudo apt install hip-runtime-amd rocm-device-libs hipfft-dev
+
+    - name: Configure (HIP)
+      run: cmake -S . -B build_hip -G Ninja
+        -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
+        -D ENABLE_CUDA=OFF
+        -D ENABLE_CPU=OFF
+        -D ENABLE_HIP=ON
+        -D CMAKE_BUILD_TYPE=Release
+        -D CMAKE_CXX_FLAGS="-Wall -ffast-math"
+        -D CMAKE_PREFIX_PATH=/opt/rocm
+
+    - name: Build (HIP)
+      run: cmake --build build_hip --config Release --verbose
+
+    - name: Install (HIP)
+      run: cmake --install build_hip --prefix artifact
+
     - name: Upload
       uses: actions/upload-artifact@v3
       with:
