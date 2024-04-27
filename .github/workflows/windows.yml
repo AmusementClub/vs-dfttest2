@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: true
 
@@ -36,16 +36,16 @@ jobs:
 
     - name: Cache CUDA
       id: cache-cuda
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: ${{ runner.os }}-cuda-11.8.0
+        key: ${{ runner.os }}-cuda-12.4.1
 
     - name: Setup CUDA
       if: steps.cache-cuda.outputs.cache-hit != 'true'
       run: |
-        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/11.8.0/network_installers/cuda_11.8.0_windows_network.exe
-        cuda_installer.exe -s nvcc_11.8 cudart_11.8 nvrtc_dev_11.8 cufft_11.8 cufft_dev_11.8
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/12.4.1/network_installers/cuda_12.4.1_windows_network.exe
+        cuda_installer.exe -s nvcc_12.4 cudart_12.4 nvrtc_dev_12.4 cufft_12.4 cufft_dev_12.4
 
     - name: Download VapourSynth headers
       run: |
@@ -61,10 +61,10 @@ jobs:
         -D ENABLE_CPU=OFF
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /EHsc"
+        -D CMAKE_SHARED_LINKER_FLAGS="/DELAYLOAD:cufft64_11.dll"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
-        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
-        CUDA_PATH_V11_8: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8
+        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4
 
     - name: Build (CUDA)
       run: cmake --build build_cuda --verbose
@@ -77,16 +77,16 @@ jobs:
         mkdir artifact_cuda
         copy install_cuda\lib\*.dll artifact_cuda
         mkdir cufft
-        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin\cufft64_*.dll" cufft
+        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cufft64_*.dll" cufft
 
     - name: Upload (CUDA)
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: vs-dfttest2-cuda-windows
         path: artifact_cuda
 
     - name: Upload cufft
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: false
       with:
         name: cufft-windows
@@ -115,7 +115,7 @@ jobs:
         copy install_cpu\lib\*.dll artifact_cpu
 
     - name: Upload (CPU)
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: vs-dfttest2-cpu-windows
         path: artifact_cpu
@@ -143,7 +143,7 @@ jobs:
         7z a -t7z -mx=9 ../vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}.7z vs-dfttest2-cpu-windows-${{ github.event.inputs.tag }}
 
     - name: Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
       with:
         tag_name: ${{ github.event.inputs.tag }}
