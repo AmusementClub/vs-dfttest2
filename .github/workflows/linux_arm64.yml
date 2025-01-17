@@ -1,0 +1,55 @@
+name: Build (Linux, ARM64)
+
+on:
+  push:
+    paths:
+      - 'CMakeLists.txt'
+      - 'gcc_source/*'
+      - '.github/workflows/linux_arm64.yml'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Setup clang
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh all
+
+    - name: Setup Ninja
+      run: pip3 install ninja
+
+    - name: Download VapourSynth headers
+      run: |
+        wget -q -O vs.zip https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R57.zip
+        unzip -q vs.zip
+        mv vapoursynth*/ vapoursynth
+
+    - name: Configure
+      run: cmake -S . -B build -G Ninja
+        -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
+        -D ENABLE_CUDA=OFF
+        -D ENABLE_CPU=OFF
+        -D ENABLE_GCC=ON
+        -D CMAKE_BUILD_TYPE=Release
+        -D CMAKE_CXX_COMPILER=clang++
+        -D CMAKE_CXX_FLAGS="-Wall -ffast-math"
+
+    - name: Build
+      run: cmake --build build --config Release --verbose
+
+    - name: Install
+      run: cmake --install build --prefix artifact
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: vs-dfttest2-Linux
+        path: artifact
