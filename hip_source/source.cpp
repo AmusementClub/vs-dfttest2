@@ -342,7 +342,7 @@ static std::variant<hipModule_t, std::string> compile(
     kernel_source << "#define WARPS_PER_BLOCK " << warps_per_block << '\n';
     if (sample_type == stInteger) {
         int bytes_per_sample = bits_per_sample / 8;
-        const char * type;
+        const char * type = "";
         if (bytes_per_sample == 1) {
             type = "unsigned char";
         } else if (bytes_per_sample == 2) {
