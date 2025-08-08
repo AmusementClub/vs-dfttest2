@@ -80,6 +80,8 @@ static const char * get_error(cufftResult_t error) {
             return "invalid plan handle";
         case CUFFT_ALLOC_FAILED:
             return "failed to allocate memory";
+        case CUFFT_INVALID_TYPE:
+            return "invalid type";
         case CUFFT_INVALID_VALUE:
             return "invalid value";
         case CUFFT_INTERNAL_ERROR:
@@ -90,18 +92,34 @@ static const char * get_error(cufftResult_t error) {
             return "the cuFFT library failed to initialize";
         case CUFFT_INVALID_SIZE:
             return "invalid transform size";
+        case CUFFT_UNALIGNED_DATA:
+            return "unaligned data";
+#if CUFFT_VERSION < 12000
         case CUFFT_INCOMPLETE_PARAMETER_LIST:
             return "missing parameters in call";
+#endif
         case CUFFT_INVALID_DEVICE:
             return "invalid device: execution of a plan was on different GPU than plan creation";
+#if CUFFT_VERSION < 12000
         case CUFFT_PARSE_ERROR:
             return "internal plan database error";
+#endif
         case CUFFT_NO_WORKSPACE:
             return "no workspace has been provided prior to plan execution";
         case CUFFT_NOT_IMPLEMENTED:
             return "functionality not implemented";
         case CUFFT_NOT_SUPPORTED:
             return "operation not supported";
+#if CUFFT_VERSION >= 12000
+        case CUFFT_MISSING_DEPENDENCY:
+            return "missing dependency";
+        case CUFFT_NVRTC_FAILURE:
+            return "nvrtc failure";
+        case CUFFT_NVJITLINK_FAILURE:
+            return "nvjitlink failure";
+        case CUFFT_NVSHMEM_FAILURE:
+            return "nvshmem failure";
+#endif
         default:
             return "unknown";
     }
