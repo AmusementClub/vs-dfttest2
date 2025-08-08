@@ -16,7 +16,7 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     defaults:
       run:
@@ -39,13 +39,13 @@ jobs:
       uses: actions/cache@v4
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: ${{ runner.os }}-cuda-12.4.1
+        key: ${{ runner.os }}-cuda-13.0.0
 
     - name: Setup CUDA
       if: steps.cache-cuda.outputs.cache-hit != 'true'
       run: |
-        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/12.4.1/network_installers/cuda_12.4.1_windows_network.exe
-        cuda_installer.exe -s nvcc_12.4 cudart_12.4 nvrtc_dev_12.4 cufft_12.4 cufft_dev_12.4
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/13.0.0/network_installers/cuda_13.0.0_windows_network.exe
+        cuda_installer.exe -s nvcc_13.0 cudart_13.0 nvrtc_dev_13.0 cufft_13.0 cufft_dev_13.0 crt_13.0 nvptxcompiler_13.0
 
     - name: Download VapourSynth headers
       run: |
@@ -61,10 +61,10 @@ jobs:
         -D ENABLE_CPU=OFF
         -D VS_INCLUDE_DIR="%cd%\vapoursynth\include"
         -D CMAKE_CXX_FLAGS="/fp:fast /EHsc"
-        -D CMAKE_SHARED_LINKER_FLAGS="/DELAYLOAD:cufft64_11.dll"
+        -D CMAKE_SHARED_LINKER_FLAGS="/DELAYLOAD:cufft64_12.dll"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
-        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4
+        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0
 
     - name: Build (CUDA)
       run: cmake --build build_cuda --verbose
@@ -77,7 +77,7 @@ jobs:
         mkdir artifact_cuda
         copy install_cuda\lib\*.dll artifact_cuda
         mkdir cufft
-        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cufft64_*.dll" cufft
+        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin\x64\cufft64_*.dll" cufft
 
     - name: Upload (CUDA)
       uses: actions/upload-artifact@v4
