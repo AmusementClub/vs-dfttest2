@@ -12,10 +12,10 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: true
 
@@ -24,10 +24,10 @@ jobs:
 
     - name: Setup CUDA
       run: |
-        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
         sudo dpkg -i cuda-keyring_1.1-1_all.deb
         sudo apt-get update
-        sudo apt-get install -y cuda-nvcc-11-8 cuda-cudart-dev-11-8 cuda-nvrtc-dev-11-8 libcufft-dev-11-8
+        sudo apt-get install -y cuda-nvcc-13-0 cuda-cudart-dev-13-0 cuda-nvrtc-dev-13-0 libcufft-dev-13-0
         echo "PATH=/usr/local/cuda/bin${PATH:+:${PATH}}" >> $GITHUB_ENV
         echo "CUDA_PATH=/usr/local/cuda" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=/usr/local/cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> $GITHUB_ENV
@@ -45,7 +45,7 @@ jobs:
         -D USE_NVRTC_STATIC=ON
         -D ENABLE_CPU=ON
         -D CMAKE_BUILD_TYPE=Release
-        -D CMAKE_CXX_COMPILER=g++-12
+        -D CMAKE_CXX_COMPILER=g++
         -D CMAKE_CXX_FLAGS="-Wall -ffast-math"
 
     - name: Build
@@ -55,14 +55,18 @@ jobs:
       run: cmake --install build --prefix artifact
 
     - name: Setup HIP
+      if: false
       run: |
         wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
-        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.0.2 jammy main" | sudo tee --append /etc/apt/sources.list.d/rocm.list
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.4.3 noble main" | sudo tee --append /etc/apt/sources.list.d/rocm.list
         echo -e 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600' | sudo tee /etc/apt/preferences.d/rocm-pin-600
         sudo apt update
         sudo apt install hip-runtime-amd rocm-device-libs hipfft-dev
+        ls -R /opt/rocm-6.4.3
+        ls -R /opt/rocm
 
     - name: Configure (HIP)
+      if: false
       run: cmake -S . -B build_hip -G Ninja
         -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
         -D ENABLE_CUDA=OFF
@@ -73,13 +77,15 @@ jobs:
         -D CMAKE_PREFIX_PATH=/opt/rocm
 
     - name: Build (HIP)
+      if: false
       run: cmake --build build_hip --config Release --verbose
 
     - name: Install (HIP)
+      if: false
       run: cmake --install build_hip --prefix artifact
 
     - name: Upload
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: vs-dfttest2-Linux
         path: artifact
