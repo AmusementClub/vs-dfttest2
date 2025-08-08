@@ -1,0 +1,69 @@
+name: Build (Windows)
+
+on:
+  push:
+    paths:
+      - 'CMakeLists.txt'
+      - 'cpu_source/*'
+      - '.github/workflows/windows_arm64.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'which tag to upload to'
+        default: ''
+
+jobs:
+  build-windows:
+    runs-on: windows-11-arm
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Setup Ninja
+      run: pip install ninja
+
+    - name: Download VapourSynth headers
+      run: |
+        curl -s -o vs.zip -L https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R57.zip
+        unzip -q vs.zip
+        mv vapoursynth-*/ vapoursynth/
+
+    - name: Configure
+      shell: bash
+      run: cmake -S . -B build -G Ninja -LA
+        -D CMAKE_BUILD_TYPE=Release
+        -D ENABLE_CUDA=OFF
+        -D ENABLE_CPU=OFF
+        -D ENABLE_GCC=ON
+        -D VS_INCLUDE_DIR="$(pwd)/vapoursynth/include"
+        -D CMAKE_CXX_COMPILER=clang++
+        -D CMAKE_CXX_FLAGS="-ffast-math"
+        -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+    - name: Build
+      run: cmake --build build --verbose
+
+    - name: Install
+      run: cmake --install build --prefix install
+
+    - name: Prepare for upload
+      run: |
+        mkdir artifact
+        copy install\lib\*.dll artifact
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: vs-dfttest2-windows
+        path: artifact
+
