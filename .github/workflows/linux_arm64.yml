@@ -5,6 +5,8 @@ on:
     paths:
       - 'CMakeLists.txt'
       - 'gcc_source/*'
+      - 'cuda_source/*'
+      - 'nvrtc_source/*'
       - '.github/workflows/linux_arm64.yml'
   workflow_dispatch:
 
@@ -26,6 +28,16 @@ jobs:
     - name: Setup Ninja
       run: pip3 install ninja
 
+    - name: Setup CUDA
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update
+        sudo apt-get install -y cuda-nvcc-13-0 cuda-cudart-dev-13-0 cuda-nvrtc-dev-13-0 libcufft-dev-13-0
+        echo "PATH=/usr/local/cuda/bin${PATH:+:${PATH}}" >> $GITHUB_ENV
+        echo "CUDA_PATH=/usr/local/cuda" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=/usr/local/cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> $GITHUB_ENV
+
     - name: Download VapourSynth headers
       run: |
         wget -q -O vs.zip https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R57.zip
@@ -35,7 +47,7 @@ jobs:
     - name: Configure
       run: cmake -S . -B build -G Ninja
         -D VS_INCLUDE_DIR="`pwd`/vapoursynth/include"
-        -D ENABLE_CUDA=OFF
+        -D ENABLE_CUDA=ON
         -D ENABLE_CPU=OFF
         -D ENABLE_GCC=ON
         -D CMAKE_BUILD_TYPE=Release
