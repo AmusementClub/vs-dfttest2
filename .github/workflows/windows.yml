@@ -39,12 +39,12 @@ jobs:
       uses: actions/cache@v4
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-        key: ${{ runner.os }}-cuda-13.0.0
+        key: ${{ runner.os }}-cuda-13.0.1
 
     - name: Setup CUDA
       if: steps.cache-cuda.outputs.cache-hit != 'true'
       run: |
-        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/13.0.0/network_installers/cuda_13.0.0_windows_network.exe
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/13.0.1/network_installers/cuda_13.0.1_windows_network.exe
         cuda_installer.exe -s nvcc_13.0 cudart_13.0 nvrtc_dev_13.0 cufft_13.0 cufft_dev_13.0 crt_13.0 nvptxcompiler_13.0
 
     - name: Download VapourSynth headers
