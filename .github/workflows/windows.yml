@@ -24,7 +24,7 @@ jobs:
 
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         submodules: true
 
@@ -36,7 +36,7 @@ jobs:
 
     - name: Cache CUDA
       id: cache-cuda
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
         key: ${{ runner.os }}-cuda-13.0.1
@@ -44,8 +44,8 @@ jobs:
     - name: Setup CUDA
       if: steps.cache-cuda.outputs.cache-hit != 'true'
       run: |
-        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/13.0.1/network_installers/cuda_13.0.1_windows_network.exe
-        cuda_installer.exe -s nvcc_13.0 cudart_13.0 nvrtc_dev_13.0 cufft_13.0 cufft_dev_13.0 crt_13.0 nvptxcompiler_13.0
+        curl -s -o cuda_installer.exe -L https://developer.download.nvidia.com/compute/cuda/13.4.2/network_installers/cuda_13.4.2_windows_x86_64_network.exe
+        cuda_installer.exe -s nvcc_13.4 cudart_13.4 nvrtc_dev_13.4 cufft_13.4 cufft_dev_13.4 crt_13.4 nvptxcompiler_13.4
 
     - name: Download VapourSynth headers
       run: |
@@ -64,7 +64,7 @@ jobs:
         -D CMAKE_SHARED_LINKER_FLAGS="/DELAYLOAD:cufft64_12.dll"
         -D CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
       env:
-        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0
+        CUDA_PATH: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4
 
     - name: Build (CUDA)
       run: cmake --build build_cuda --verbose
@@ -77,7 +77,7 @@ jobs:
         mkdir artifact_cuda
         copy install_cuda\lib\*.dll artifact_cuda
         mkdir cufft
-        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0\bin\x64\cufft64_*.dll" cufft
+        copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin\x64\cufft64_*.dll" cufft
 
     - name: Upload (CUDA)
       uses: actions/upload-artifact@v4
@@ -115,7 +115,7 @@ jobs:
         copy install_cpu\lib\*.dll artifact_cpu
 
     - name: Upload (CPU)
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: vs-dfttest2-cpu-windows
         path: artifact_cpu
